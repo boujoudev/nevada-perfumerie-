@@ -150,6 +150,51 @@ class TestEcrans(unittest.TestCase):
         connexion._valider()
         self.assertTrue(connexion.ok)
 
+    def test_id_personnalise_dans_creation_et_stock(self):
+        m = gui_stubs.messages
+        creation = self.app.vues["Création"]
+        form = creation.formulaires["PARFUM"]
+        self.remplir(form, {"code": "ROSE1", "nom": "Rose", "prix_achat_100ml": "1000",
+                            "quantite_stock_ml": "500"})
+        creation._creer("PARFUM")
+        self.assertEqual(m.erreurs, [])
+        self.remplir(form, {"code": "rose1", "nom": "Autre", "prix_achat_100ml": "1"})   # ID déjà pris
+        creation._creer("PARFUM")
+        self.assertEqual(len(m.erreurs), 1)
+        self.assertIn("déjà utilisé", m.erreurs[0])
+        m.erreurs.clear()
+        stock = self.app.vues["Stock"]
+        self.app.afficher("Stock")
+        self.assertEqual(stock.tableau.arbre.lignes["PARFUM:1"][0][0], "ROSE1")
+        # modification depuis le stock : on peut garder son ID et en prendre un libre
+        modif = DialogueModifier(self.app, self.conn, "PARFUM", 1, stock.rafraichir)
+        saisir(modif.formulaire.entrees["code"], "ROSE2")
+        modif._enregistrer()
+        self.assertEqual(m.erreurs, [])
+        self.assertEqual(self.conn.execute("SELECT code FROM parfums").fetchone()[0], "ROSE2")
+
+    def test_logs_filtre_ventes_apres_suppression(self):
+        self.creer_catalogue()
+        vente = self.app.vues["Vente"]
+        self.app.afficher("Vente")
+        for prix in ("700", "800"):
+            saisir(vente.entree_total, prix)
+            vente._valider()
+        logs = self.app.vues["Logs"]
+        self.app.afficher("Logs")
+        logs.menu_type.set("Ventes")
+        logs.charger_logs()
+        self.assertEqual(len(logs.tableau.arbre.lignes), 2)
+        logs.tableau.arbre.selection_set(next(iter(logs.tableau.arbre.lignes)))
+        logs._supprimer_vente()                                  # la vente supprimée disparaît de « Ventes »
+        self.assertEqual(len(logs.tableau.arbre.lignes), 1)
+        logs.menu_type.set("Tous")                               # ... mais reste dans l'historique complet
+        logs.charger_logs()
+        types = [valeurs[1] for valeurs, _tags in logs.tableau.arbre.lignes.values()]
+        self.assertEqual((types.count("Vente"), types.count("Annulation")), (2, 1))
+        self.assertIn("Dépense nette", logs.lbl_totaux.cget("text"))
+        self.assertIn("Bénéfice net", logs.lbl_totaux.cget("text"))
+
     def test_alcool_automatique_dans_le_formulaire(self):
         creation = self.app.vues["Création"]
         formulaire = creation.formulaires["FLACON"]

@@ -24,7 +24,8 @@ from typing import Iterator, Optional
 NOM_APP = "GestionParfumerie"
 NOM_FICHIER_DB = "parfumerie.db"
 NB_SAUVEGARDES_MAX = 10
-VERSION_SCHEMA = 3
+VERSION_SCHEMA = 4
+TABLES_PRODUITS = (("flacons", "F"), ("parfums", "P"), ("alcools", "A"))
 
 
 # --------------------------------------------------------------------------
@@ -103,6 +104,13 @@ def creer_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(sql)
     conn.commit()
     _migrer(conn)
+    _creer_index_codes(conn)
+
+
+def _creer_index_codes(conn: sqlite3.Connection) -> None:
+    """Un ID ne peut exister qu'une fois par table (sans tenir compte des majuscules)."""
+    for table, _ in TABLES_PRODUITS:
+        conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_code ON {table}(code COLLATE NOCASE)")
 
 
 def _colonnes(conn: sqlite3.Connection, table: str) -> set:
@@ -113,6 +121,7 @@ def _migrer(conn: sqlite3.Connection) -> None:
     """Met à niveau une base créée avec une ancienne version de l'application.
 
     v1 -> v2 : prix de l'alcool au ml -> au litre (valeurs x 1000).
+    v3 -> v4 : ID personnalisable (colonne code) ; les produits existants gardent leur ID affiché (F-1...).
     v2 -> v3 : prix du parfum au ml / 10 ml -> pour 100 ml. Les nombres déjà saisis sont
                conservés tels quels : ils étaient destinés à être des prix pour 100 ml.
     """
@@ -129,6 +138,11 @@ def _migrer(conn: sqlite3.Connection) -> None:
         if version < 3 and "prix_achat_ml" in _colonnes(conn, "parfums"):
             conn.execute("ALTER TABLE parfums RENAME COLUMN prix_achat_ml TO prix_achat_100ml")
             conn.execute("ALTER TABLE parfums RENAME COLUMN prix_vente_10ml TO prix_vente_100ml")
+        if version < 4:
+            for table, prefixe in TABLES_PRODUITS:
+                if "code" not in _colonnes(conn, table):
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN code TEXT")
+                conn.execute(f"UPDATE {table} SET code = '{prefixe}-' || id WHERE code IS NULL AND actif = 1")
         conn.execute("INSERT OR REPLACE INTO parametres (cle, valeur) VALUES ('schema_version', ?)",
                      (str(VERSION_SCHEMA),))
 

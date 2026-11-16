@@ -33,7 +33,8 @@ class DialogueModifier(FenetreModale):
         self.conn, self.type_code, self.identifiant = conn, type_code, identifiant
         self.apres = apres_enregistrement
         t = CATALOGUE[type_code]
-        super().__init__(master, f"Modifier {t.libelle.lower()} {t.code_affiche(identifiant)}",
+        super().__init__(master, f"Modifier {t.libelle.lower()} "
+                         f"{t.code_de(produits_repo.obtenir(conn, type_code, identifiant) or {'id': identifiant})}",
                          560, 130 + 46 * (len(t.champs) + 1))
         self.formulaire = FormulaireProduit(self, type_code)
         self.formulaire.pack(fill="x", padx=15, pady=(15, 5))
@@ -69,7 +70,7 @@ class DialogueReappro(FenetreModale):
         t = CATALOGUE[type_code]
         produit = produits_repo.obtenir(conn, type_code, identifiant)
         super().__init__(master, "Réapprovisionner", 440, 250)
-        ctk.CTkLabel(self, text=f"{t.code_affiche(identifiant)} · {produit['nom']}",
+        ctk.CTkLabel(self, text=f"{t.code_de(produit)} · {produit['nom']}",
                      font=ctk.CTkFont(size=15, weight="bold")).pack(pady=(20, 4))
         ctk.CTkLabel(self, text=f"Stock actuel : {fmt_nombre(produit[t.colonne_stock])} {t.unite_stock}"
                      ).pack(pady=2)
@@ -101,12 +102,14 @@ class DialogueDetails(FenetreModale):
     def __init__(self, master, conn: sqlite3.Connection, type_code: str, identifiant: int):
         t = CATALOGUE[type_code]
         produit = produits_repo.obtenir(conn, type_code, identifiant)
-        super().__init__(master, f"Détails — {t.code_affiche(identifiant)}", 520, 150 + 34 * len(t.champs))
+        super().__init__(master, f"Détails — {t.code_de(produit or {'id': identifiant})}", 520, 150 + 34 * len(t.champs))
         texte = ctk.CTkTextbox(self, width=480, height=60 + 34 * len(t.champs))
         texte.pack(padx=15, pady=15, fill="both", expand=True)
-        lignes = [f"Type : {t.libelle}", f"Identifiant : {t.code_affiche(identifiant)}"]
+        lignes = [f"Type : {t.libelle}", f"ID : {t.code_de(produit or {'id': identifiant})}"]
         if produit is not None:
             for champ in t.champs:
+                if champ.cle == "code":
+                    continue
                 valeur = produit[champ.cle]
                 lignes.append(f"{champ.libelle} : "
                               f"{valeur if champ.genre == 'texte' else fmt_nombre(valeur)}")

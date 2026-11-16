@@ -124,14 +124,14 @@ class FormulaireProduit(ctk.CTkFrame):
             entree.delete(0, "end")
             if champ.defaut is not None:
                 entree.insert(0, champ.defaut)
-        self.entrees[self.type.champs[0].cle].focus_set()
+        self.entrees["nom"].focus_set()
         self._maj_alcool()
 
     def remplir(self, ligne) -> None:
         for champ in self.type.champs:
             entree = self.entrees[champ.cle]
             entree.delete(0, "end")
-            entree.insert(0, fmt_brut(ligne[champ.cle]))
+            entree.insert(0, self.type.code_de(ligne) if champ.cle == "code" else fmt_brut(ligne[champ.cle]))
         self._maj_alcool()
 
     def valeurs(self) -> Dict[str, str]:

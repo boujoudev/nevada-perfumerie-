@@ -142,12 +142,68 @@ class TestProduits(BaseTest):
         ligne = ps.rechercher(self.conn, "", "Nom", "ALCOOL")[0]
         self.assertEqual(ligne["prix_achat_txt"], "500,00 DA/L")
 
+    def test_id_automatique_et_personnalise(self):
+        f, p, a = self.creer_jeu()
+        self.assertEqual([r["code"] for r in ps.rechercher(self.conn)], ["F-1", "P-1", "A-1"])
+        res = ps.creer_produit(self.conn, "PARFUM", {"code": "ROSE1", "nom": "Rose", "prix_achat_100ml": "10"})
+        self.assertEqual(res["code"], "ROSE1")
+        self.assertEqual(len(ps.rechercher(self.conn, "rose1", "ID")), 1)           # recherche exacte, casse ignorée
+        self.assertEqual(ps.rechercher(self.conn, "ROSE", "ID"), [])                # pas de recherche partielle par ID
+
+    def test_id_deja_pris_refuse(self):
+        self.creer_jeu()
+        ps.creer_produit(self.conn, "PARFUM", {"code": "R12", "nom": "A", "prix_achat_100ml": "1"})
+        for type_code, champs in (("PARFUM", {"nom": "B", "prix_achat_100ml": "1"}),
+                                  ("ALCOOL", {"nom": "C", "prix_achat_litre": "1"}),
+                                  ("FLACON", {"nom": "D", "capacite_ml": "50", "prix_achat": "1",
+                                              "qnt_parfum_necessaire": "10"})):
+            with self.assertRaises(ErreurMetier) as ctx:                             # même ID, même casse ou non
+                ps.creer_produit(self.conn, type_code, {**champs, "code": "r12"})
+            self.assertIn("déjà utilisé", str(ctx.exception))
+        with self.assertRaises(ErreurMetier):                                        # ID automatique déjà pris (F-1)
+            ps.creer_produit(self.conn, "ALCOOL", {"code": "F-1", "nom": "E", "prix_achat_litre": "1"})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM alcools").fetchone()[0], 1)
+
+    def test_id_invalide(self):
+        for mauvais in ("a b", "x" * 31):
+            with self.assertRaises(ErreurMetier):
+                ps.creer_produit(self.conn, "PARFUM", {"code": mauvais, "nom": "P", "prix_achat_100ml": "1"})
+
+    def test_modifier_l_id(self):
+        f, p, a = self.creer_jeu()
+        autre = ps.creer_produit(self.conn, "PARFUM", {"code": "OUD", "nom": "Oud", "prix_achat_100ml": "5"})["id"]
+        champs = {"nom": "Rose de Mai", "prix_achat_100ml": "1000", "quantite_stock_ml": "500", "seuil_alerte": "100"}
+        with self.assertRaises(ErreurMetier):                                        # pris par « Oud »
+            ps.modifier_produit(self.conn, "PARFUM", p, {**champs, "code": "oud"})
+        ps.modifier_produit(self.conn, "PARFUM", p, {**champs, "code": "P-1"})        # garder son propre ID : OK
+        ps.modifier_produit(self.conn, "PARFUM", p, {**champs, "code": "ROSE"})       # nouvel ID libre : OK
+        self.assertEqual(ps.rechercher(self.conn, "ROSE", "ID")[0]["nom"], "Rose de Mai")
+        self.assertEqual(ps.rechercher(self.conn, "P-1", "ID"), [])                   # l'ancien ID est libéré
+        ps.modifier_produit(self.conn, "PARFUM", p, {**champs, "code": ""})           # vide = inchangé
+        self.assertEqual(ps.rechercher(self.conn, "ROSE", "ID")[0]["id"], p)
+        ps.creer_produit(self.conn, "ALCOOL", {"code": "P-1", "nom": "X", "prix_achat_litre": "1"})  # réutilisable
+
+    def test_id_libere_apres_suppression(self):
+        f, p, a = self.creer_jeu()
+        ps.supprimer_produit(self.conn, "PARFUM", p)
+        res = ps.creer_produit(self.conn, "PARFUM", {"code": "P-1", "nom": "Nouveau", "prix_achat_100ml": "1"})
+        self.assertEqual(res["code"], "P-1")
+
+    def test_id_automatique_evite_les_collisions(self):
+        ps.creer_produit(self.conn, "FLACON", {"code": "F-2", "nom": "Choisi à la main", "capacite_ml": "50",
+                                               "prix_achat": "1", "qnt_parfum_necessaire": "10"})
+        res = ps.creer_produit(self.conn, "FLACON", {"nom": "Auto", "capacite_ml": "50", "prix_achat": "1",
+                                                     "qnt_parfum_necessaire": "10"})   # son id interne vaut 2
+        self.assertEqual(res["id"], 2)
+        self.assertNotEqual(res["code"].lower(), "f-2")
+        self.assertTrue(res["code"].startswith("F-2"))
+
     def test_recherche(self):
         self.creer_jeu()
         self.assertEqual(len(ps.rechercher(self.conn)), 3)
         self.assertEqual(len(ps.rechercher(self.conn, "ROSE", "Nom")), 1)          # partielle, casse
-        self.assertEqual(len(ps.rechercher(self.conn, "1", "ID")), 3)              # id 1 dans chaque table
-        self.assertEqual(len(ps.rechercher(self.conn, "p-1", "ID")), 1)            # code préfixé
+        self.assertEqual(len(ps.rechercher(self.conn, "1", "ID")), 0)              # ID exact : « 1 » n'existe pas
+        self.assertEqual(len(ps.rechercher(self.conn, "p-1", "ID")), 1)            # ID automatique, casse ignorée
         self.assertEqual(len(ps.rechercher(self.conn, "", "Nom", "FLACON")), 1)    # filtre type
         self.assertEqual(ps.rechercher(self.conn, "zzz", "Nom"), [])
 
@@ -270,6 +326,7 @@ class TestStatsEtExport(BaseTest):
         for periode in ("Aujourd'hui", "Ce mois", "Cette année"):
             self.assertEqual(r[periode]["nb_ventes"], 2)
             self.assertEqual(r[periode]["ca"], 1200)
+            self.assertEqual(r[periode]["cout"], 2 * 267.5)
             self.assertEqual(r[periode]["benefice"], 2 * (600 - 267.5))
         # stock : 8 flacons×100 + 470 ml×10 + 4930 ml×0.5
         self.assertEqual(st.valeur_stock(self.conn), 800 + 4700 + 2465)
@@ -280,13 +337,42 @@ class TestStatsEtExport(BaseTest):
         vs.supprimer_vente(self.conn, vid)
         self.assertEqual(st.resume_standard(self.conn)["Aujourd'hui"]["nb_ventes"], 1)
         logs = st.lister_logs(self.conn, None, None, "Tous")
-        self.assertEqual(st.totaux_nets(logs), (600.0, 600 - 267.5))   # vente - annulation
+        t = st.totaux_logs(logs)                                       # ventes - ventes supprimées
+        self.assertEqual((t["ca"], t["cout"], t["benefice"]), (600.0, 267.5, 600 - 267.5))
+        self.assertEqual(t["achats"], 0)
+        # filtre « Ventes » : la vente supprimée disparaît ; « Tous » la garde (avec son annulation)
+        ventes = st.lister_logs(self.conn, None, None, "Ventes")
+        self.assertEqual(len(ventes), 1)
+        self.assertEqual(ventes[0]["vente_id"], self.conn.execute("SELECT id FROM ventes").fetchone()[0])
+        self.assertEqual(sorted(l["type"] for l in logs if l["type"] in ("VENTE", "ANNULATION")),
+                         ["ANNULATION", "VENTE", "VENTE"])
+        self.assertEqual(st.totaux_logs(ventes)["ca"], 600.0)
 
     def test_top_produits(self):
         self.vendre(3)
         self.assertEqual(st.top_parfums(self.conn)[0]["nom"], "Rose de Mai")
         self.assertEqual(st.top_parfums(self.conn)[0]["nb_ventes"], 3)
         self.assertEqual(st.top_flacons(self.conn)[0]["nb_ventes"], 3)
+
+    def test_depenses_achats_dans_les_totaux(self):
+        self.vendre(1, prix=600)
+        ps.reapprovisionner(self.conn, "PARFUM", 1, "100")                 # 100 ml à 1000/100 ml = 1000 DA
+        t = st.totaux_logs(st.lister_logs(self.conn, None, None, "Tous"))
+        self.assertEqual(t["achats"], 1000)
+        self.assertEqual(t["cout"], 267.5)
+
+    def test_top_parfums_par_benefice(self):
+        f, p, a = self.creer_jeu()
+        oud = ps.creer_produit(self.conn, "PARFUM", {"nom": "Oud", "prix_achat_100ml": "500",
+                                                     "quantite_stock_ml": "500"})["id"]
+        for _ in range(3):                                                  # Rose : 3 ventes à 300 DA
+            vs.valider_vente(self.conn, [{"flacon_id": f, "parfum_id": p, "alcool_id": a, "prix_final": 300}])
+        vs.valider_vente(self.conn, [{"flacon_id": f, "parfum_id": oud, "alcool_id": a, "prix_final": 1000}])
+        self.assertEqual(st.top_parfums(self.conn)[0]["nom"], "Rose de Mai")              # le plus vendu
+        meilleur = st.top_parfums_benefice(self.conn)
+        self.assertEqual(meilleur[0]["nom"], "Oud")                                        # le plus rentable
+        self.assertEqual(meilleur[0]["benefice_total"], 1000 - 100 - 75 - 17.5)
+        self.assertEqual(meilleur[1]["benefice_total"], 3 * (300 - 267.5))
 
     def test_bornes(self):
         j = date(2026, 11, 15)  # dimanche

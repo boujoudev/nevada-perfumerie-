@@ -39,10 +39,11 @@ Lancer les tests : `python -m unittest discover -s tests -v`
 
 ## 3. Utilisation en bref
 
+- **ID** : chaque produit a un ID que vous choisissez (lettres/chiffres, sans espace) ; vide = automatique (F-1, P-1, A-1). Un ID déjà pris par un autre produit est refusé ; l'ID d'un produit supprimé est libéré.
 - **Création** : flacon, parfum, alcool (stocks et quantités en **ml**, prix du parfum pour **100 ml**, prix de l'alcool au **litre**). Le produit entre directement en stock.
 - **Stock** : recherche par nom/ID/type, double-clic = modifier, `+ Ajouter du stock` (crée un « Achat » dans les logs), rouge = stock sous le seuil.
 - **Vente** : choisir flacon + parfum (+ alcool), **saisir le prix de vente** (Entrée = ajouter au panier) ; le coût et le bénéfice s'affichent, avec le **bénéfice du panier** en bas ; le **TOTAL est modifiable** ; case « le client apporte son flacon » (coût du flacon non compté, stock inchangé) ; panier multi-articles ; `VALIDER LA VENTE`. Stock en rupture = avertissement, vente quand même possible (stock négatif).
-- **Logs & Stats** : historique filtrable, export CSV (Excel), CA / bénéfice jour-mois-année, top 5, valeur du stock. On peut **supprimer une vente** : stocks remis + trace dans les logs.
+- **Logs & Stats** : historique filtrable (le filtre « Ventes » ne montre que les ventes qui existent encore ; « Tous » garde aussi les annulations), totaux : ventes nettes / dépense nette (coût des produits vendus) / bénéfice net / achats de stock, top 5 parfums par quantité **et par bénéfice**, export CSV (Excel), CA / bénéfice jour-mois-année, top 5, valeur du stock. On peut **supprimer une vente** : stocks remis + trace dans les logs.
 - **Paramètres** : mot de passe (facultatif), sauvegarde manuelle.
 
 **Calculs :** il n'y a **pas de prix de vente** dans les fiches produits : le vendeur saisit le prix à chaque vente. Coût parfum = ml × prix d'achat (100 ml) / 100 · coût alcool = ml × prix d'achat (litre) / 1000 · **alcool par flacon = capacité − parfum (automatique)** · bénéfice = prix saisi − coût de revient.

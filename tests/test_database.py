@@ -193,7 +193,7 @@ class TestMigration(BaseTestCase):
         ligne = conn.execute("SELECT prix_achat_litre, prix_vente_litre FROM alcools").fetchone()
         self.assertEqual((ligne[0], ligne[1]), (500, 1000))
         version = conn.execute("SELECT valeur FROM parametres WHERE cle='schema_version'").fetchone()[0]
-        self.assertEqual(version, "3")
+        self.assertEqual(version, "4")
         conn.close()
         db.ouvrir_base().connexion.close()       # idempotent : pas de 2e conversion
         conn = db.creer_connexion()
@@ -212,6 +212,32 @@ class TestMigration(BaseTestCase):
         conn = db.ouvrir_base().connexion
         ligne = conn.execute("SELECT prix_achat_100ml, prix_vente_100ml FROM parfums").fetchone()
         self.assertEqual((ligne[0], ligne[1]), (100, 200))
+        conn.close()
+
+
+    def test_migration_v3_ajoute_les_id_personnalisables(self):
+        """Une base v3 (sans colonne code) reçoit les ID F-1/P-1/A-1 ; un ID ne peut plus être dupliqué."""
+        conn = db.ouvrir_base().connexion
+        try:
+            for table in ("flacons", "parfums", "alcools"):
+                conn.execute(f"DROP INDEX IF EXISTS idx_{table}_code")
+                conn.execute(f"ALTER TABLE {table} DROP COLUMN code")
+        except sqlite3.OperationalError:
+            conn.close()
+            self.skipTest("SQLite trop ancien pour simuler l'ancienne structure")
+        conn.execute("INSERT INTO flacons (nom, capacite_ml) VALUES ('Carré', 50)")
+        conn.execute("INSERT INTO parfums (nom) VALUES ('Rose')")
+        conn.execute("INSERT INTO alcools (nom) VALUES ('Alcool')")
+        conn.execute("INSERT INTO parfums (nom, actif) VALUES ('Ancien supprimé', 0)")
+        conn.execute("UPDATE parametres SET valeur = '3' WHERE cle = 'schema_version'")
+        conn.close()
+        conn = db.ouvrir_base().connexion
+        codes = [conn.execute(f"SELECT code FROM {t} WHERE actif = 1").fetchone()[0]
+                 for t in ("flacons", "parfums", "alcools")]
+        self.assertEqual(codes, ["F-1", "P-1", "A-1"])
+        self.assertIsNone(conn.execute("SELECT code FROM parfums WHERE actif = 0").fetchone()[0])
+        with self.assertRaises(sqlite3.IntegrityError):               # index unique actif
+            conn.execute("INSERT INTO parfums (nom, code) VALUES ('Autre', 'p-1')")   # insensible à la casse
         conn.close()
 
 

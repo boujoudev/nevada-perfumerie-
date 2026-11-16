@@ -50,7 +50,7 @@ class ChoixProduit(ctk.CTkFrame):
     # ----------------------------------------------------------- données
     def recharger(self) -> None:
         t = CATALOGUE[self.type_code]
-        self._tous = [(f"{t.code_affiche(r['id'])} · {r['nom']}", r["id"])
+        self._tous = [(f"{t.code_de(r)} · {r['nom']}", r["id"])
                       for r in produits_repo.lister(self.conn, self.type_code)]
         if self.optionnel:
             self._tous.insert(0, (SANS_ALCOOL, None))

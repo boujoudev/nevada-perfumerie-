@@ -21,6 +21,7 @@ class Champ:
     minimum: Optional[float] = 0  # None = pas de minimum (stock négatif permis)
     strict: bool = False          # True = doit être > 0
     defaut: Optional[str] = None  # valeur proposée / utilisée si champ vide
+    obligatoire: bool = True      # False = peut rester vide (ex. ID automatique)
 
 
 @dataclass(frozen=True)
@@ -43,12 +44,21 @@ class TypeProduit:
         """Ex. 'F-3' : évite la confusion entre le flacon n°3 et le parfum n°3."""
         return f"{self.prefixe}-{identifiant}"
 
+    def code_de(self, ligne) -> str:
+        """ID affiché d'un produit : l'ID choisi par l'utilisateur, sinon l'ID automatique (F-3)."""
+        try:
+            code = ligne["code"]
+        except (KeyError, IndexError):
+            code = None
+        return code or self.code_affiche(ligne["id"])
+
 
 CATALOGUE: Dict[str, TypeProduit] = {
     "FLACON": TypeProduit(
         code="FLACON", libelle="Flacon", table="flacons", prefixe="F",
         colonne_stock="quantite_stock", colonne_prix_achat="prix_achat", unite_stock="unités",
         champs=(
+            Champ("code", "ID (laisser vide = automatique)", "texte", obligatoire=False),
             Champ("nom", "Nom du flacon", "texte"),
             Champ("capacite_ml", "Capacité (ml)", "nombre", strict=True),
             Champ("prix_achat", "Prix d'achat du flacon vide (DA)", "nombre"),
@@ -63,6 +73,7 @@ CATALOGUE: Dict[str, TypeProduit] = {
         code="PARFUM", libelle="Parfum", table="parfums", prefixe="P",
         colonne_stock="quantite_stock_ml", colonne_prix_achat="prix_achat_100ml", unite_stock="ml",
         champs=(
+            Champ("code", "ID (laisser vide = automatique)", "texte", obligatoire=False),
             Champ("nom", "Nom du parfum", "texte"),
             Champ("prix_achat_100ml", "Prix d'achat pour 100 ml (DA)", "nombre"),
             Champ("quantite_stock_ml", "Quantité en stock (ml)", "nombre", minimum=None, defaut="0"),
@@ -73,6 +84,7 @@ CATALOGUE: Dict[str, TypeProduit] = {
         code="ALCOOL", libelle="Alcool", table="alcools", prefixe="A",
         colonne_stock="quantite_stock_ml", colonne_prix_achat="prix_achat_litre", unite_stock="ml",
         champs=(
+            Champ("code", "ID (laisser vide = automatique)", "texte", obligatoire=False),
             Champ("nom", "Nom de l'alcool", "texte"),
             Champ("prix_achat_litre", "Prix d'achat par litre (DA)", "nombre"),
             Champ("quantite_stock_ml", "Quantité en stock (ml)", "nombre", minimum=None, defaut="0"),

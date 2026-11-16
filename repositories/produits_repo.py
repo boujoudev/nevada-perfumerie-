@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Dict, List, Optional
 
-from models.catalogue import CATALOGUE
+from models.catalogue import CATALOGUE, ORDRE_TYPES
 
 
 def _verifier_cles(type_code: str, valeurs: Dict[str, object]) -> None:
@@ -47,7 +47,8 @@ def lister(conn: sqlite3.Connection, type_code: str) -> List[sqlite3.Row]:
 
 
 def desactiver(conn: sqlite3.Connection, type_code: str, identifiant: int) -> None:
-    conn.execute(f"UPDATE {CATALOGUE[type_code].table} SET actif = 0 WHERE id = ?",
+    # L'ID est libéré : un autre produit pourra le reprendre (l'historique garde les noms)
+    conn.execute(f"UPDATE {CATALOGUE[type_code].table} SET actif = 0, code = NULL WHERE id = ?",
                  (identifiant,))
 
 
@@ -57,3 +58,14 @@ def ajuster_stock(conn: sqlite3.Connection, type_code: str, identifiant: int,
     t = CATALOGUE[type_code]
     conn.execute(f"UPDATE {t.table} SET {t.colonne_stock} = {t.colonne_stock} + ? WHERE id = ?",
                  (delta, identifiant))
+
+
+def trouver_par_code(conn: sqlite3.Connection, code: str) -> Optional[Dict[str, object]]:
+    """Cherche un ID dans les 3 tables (sans tenir compte des majuscules). None si libre."""
+    for type_code in ORDRE_TYPES:
+        ligne = conn.execute(
+            f"SELECT id, nom FROM {CATALOGUE[type_code].table} WHERE code = ? COLLATE NOCASE",
+            (code,)).fetchone()
+        if ligne:
+            return {"type": type_code, "id": ligne["id"], "nom": ligne["nom"]}
+    return None

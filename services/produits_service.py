@@ -16,10 +16,45 @@ from utils.formatage import fmt_ml, fmt_nombre, fmt_prix, parse_nombre
 DIVISEUR_PRIX = {"FLACON": 1, "PARFUM": 100, "ALCOOL": 1000}
 
 
+LONGUEUR_MAX_ID = 30
+
+
 def _type(type_code: str) -> TypeProduit:
     if type_code not in CATALOGUE:
         raise ErreurMetier(f"Type de produit inconnu : {type_code}")
     return CATALOGUE[type_code]
+
+
+def _nettoyer_id(brut: Optional[str]) -> Optional[str]:
+    """ID saisi par l'utilisateur : None si vide, sinon texte sans espace (max 30 caractères)."""
+    identifiant = (brut or "").strip()
+    if not identifiant:
+        return None
+    if len(identifiant) > LONGUEUR_MAX_ID:
+        raise ErreurMetier(f"L'ID est trop long ({LONGUEUR_MAX_ID} caractères maximum).")
+    if any(c.isspace() for c in identifiant):
+        raise ErreurMetier("L'ID ne doit pas contenir d'espace (utilisez - ou _).")
+    return identifiant
+
+
+def _verifier_id_libre(conn: sqlite3.Connection, identifiant: str,
+                       exclure: Optional[Tuple[str, int]] = None) -> None:
+    """Refuse un ID déjà pris par un autre produit (flacon, parfum ou alcool)."""
+    existant = produits_repo.trouver_par_code(conn, identifiant)
+    if existant and (existant["type"], existant["id"]) != exclure:
+        libelle = CATALOGUE[existant["type"]].libelle.lower()
+        raise ErreurMetier(
+            f"L'ID « {identifiant} » est déjà utilisé par le {libelle} « {existant['nom']} ». "
+            "Choisissez-en un autre.")
+
+
+def _id_automatique(conn: sqlite3.Connection, t: TypeProduit, identifiant: int) -> str:
+    """F-3, P-3, A-3... (avec un suffixe si quelqu'un a déjà choisi cet ID à la main)."""
+    base = t.code_affiche(identifiant)
+    candidat, n = base, 1
+    while produits_repo.trouver_par_code(conn, candidat):
+        candidat, n = f"{base}.{n}", n + 1
+    return candidat
 
 
 # ------------------------------------------------------------------ validation
@@ -32,7 +67,9 @@ def valider_saisies(type_code: str, saisies: Dict[str, str]) -> Tuple[dict, List
     valeurs: dict = {}
     for champ in t.champs:
         brut = saisies.get(champ.cle, "")
-        if champ.genre == "texte":
+        if champ.cle == "code":
+            valeurs["code"] = _nettoyer_id(brut)          # None = automatique / inchangé
+        elif champ.genre == "texte":
             texte = (brut or "").strip()
             if not texte:
                 raise ErreurMetier(f"Le champ « {champ.libelle} » est obligatoire.")
@@ -58,29 +95,46 @@ def valider_saisies(type_code: str, saisies: Dict[str, str]) -> Tuple[dict, List
 
 # ------------------------------------------------------------------ écriture
 def creer_produit(conn: sqlite3.Connection, type_code: str, saisies: Dict[str, str]) -> dict:
-    """Crée un produit ; il entre automatiquement en stock avec la quantité saisie."""
+    """Crée un produit ; il entre automatiquement en stock avec la quantité saisie.
+
+    L'ID peut être choisi (il doit être libre) ; vide = ID automatique (F-1, P-1, A-1...).
+    """
     t = _type(type_code)
     valeurs, avertissements = valider_saisies(type_code, saisies)
     with transaction(conn):
+        if valeurs["code"]:
+            _verifier_id_libre(conn, valeurs["code"])
         identifiant = produits_repo.inserer(conn, type_code, valeurs)
+        code = valeurs["code"]
+        if not code:
+            code = _id_automatique(conn, t, identifiant)
+            produits_repo.modifier(conn, type_code, identifiant, {"code": code})
         logs_repo.ajouter(conn, "CREATION", type_code, identifiant, valeurs["nom"],
                           quantite=valeurs[t.colonne_stock],
-                          details=f"Création {t.libelle.lower()} {t.code_affiche(identifiant)}")
-    return {"id": identifiant, "code": t.code_affiche(identifiant),
-            "nom": valeurs["nom"], "avertissements": avertissements}
+                          details=f"Création {t.libelle.lower()} {code}")
+    return {"id": identifiant, "code": code, "nom": valeurs["nom"],
+            "avertissements": avertissements}
 
 
 def modifier_produit(conn: sqlite3.Connection, type_code: str, identifiant: int,
                      saisies: Dict[str, str]) -> dict:
+    """Modifie un produit. ID changé = doit être libre ; ID vidé = l'ancien est conservé."""
     t = _type(type_code)
-    if produits_repo.obtenir(conn, type_code, identifiant) is None:
+    produit = produits_repo.obtenir(conn, type_code, identifiant)
+    if produit is None:
         raise ErreurMetier("Ce produit n'existe plus.")
     valeurs, avertissements = valider_saisies(type_code, saisies)
     with transaction(conn):
+        if valeurs["code"]:
+            _verifier_id_libre(conn, valeurs["code"], exclure=(type_code, identifiant))
+            code = valeurs["code"]
+        else:
+            valeurs.pop("code")
+            code = t.code_de(produit)
         produits_repo.modifier(conn, type_code, identifiant, valeurs)
         logs_repo.ajouter(conn, "MODIFICATION", type_code, identifiant, valeurs["nom"],
-                          details=f"Modification {t.libelle.lower()} {t.code_affiche(identifiant)}")
-    return {"avertissements": avertissements}
+                          details=f"Modification {t.libelle.lower()} {code}")
+    return {"avertissements": avertissements, "code": code}
 
 
 def supprimer_produit(conn: sqlite3.Connection, type_code: str, identifiant: int) -> None:
@@ -92,7 +146,7 @@ def supprimer_produit(conn: sqlite3.Connection, type_code: str, identifiant: int
     with transaction(conn):
         produits_repo.desactiver(conn, type_code, identifiant)
         logs_repo.ajouter(conn, "SUPPRESSION", type_code, identifiant, produit["nom"],
-                          details=f"Suppression {t.libelle.lower()} {t.code_affiche(identifiant)}")
+                          details=f"Suppression {t.libelle.lower()} {t.code_de(produit)}")
 
 
 def reapprovisionner(conn: sqlite3.Connection, type_code: str, identifiant: int,
@@ -110,7 +164,7 @@ def reapprovisionner(conn: sqlite3.Connection, type_code: str, identifiant: int,
         produits_repo.ajuster_stock(conn, type_code, identifiant, quantite)
         logs_repo.ajouter(conn, "ACHAT", type_code, identifiant, produit["nom"],
                           quantite=quantite, prix=cout,
-                          details=f"Réapprovisionnement {t.code_affiche(identifiant)}")
+                          details=f"Réapprovisionnement {t.code_de(produit)}")
     return produits_repo.obtenir(conn, type_code, identifiant)[t.colonne_stock]
 
 
@@ -131,7 +185,7 @@ def _ligne_unifiee(type_code: str, row: sqlite3.Row) -> dict:
     return {
         "type": type_code,
         "id": row["id"],
-        "code": t.code_affiche(row["id"]),
+        "code": t.code_de(row),
         "nom": row["nom"],
         "type_libelle": t.libelle,
         "prix_achat_txt": fmt_prix(row[t.colonne_prix_achat]) + suffixe_achat,
@@ -147,7 +201,7 @@ def rechercher(conn: sqlite3.Connection, texte: str = "", par: str = "Nom",
     """Recherche dans le stock.
 
     par = "Nom"  : recherche partielle, insensible à la casse.
-    par = "ID"   : recherche exacte ('3' ou 'F-3').
+    par = "ID"   : recherche exacte de l'ID (sans tenir compte des majuscules).
     type_code    : None = tous les types.
     """
     texte = (texte or "").strip()
@@ -158,8 +212,7 @@ def rechercher(conn: sqlite3.Connection, texte: str = "", par: str = "Nom",
             ligne = _ligne_unifiee(code, row)
             if texte:
                 if par == "ID":
-                    if not (texte.isdigit() and int(texte) == row["id"]
-                            or texte.upper() == ligne["code"]):
+                    if texte.casefold() != ligne["code"].casefold():
                         continue
                 elif texte.casefold() not in row["nom"].casefold():
                     continue

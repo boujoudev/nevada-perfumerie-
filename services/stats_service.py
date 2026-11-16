@@ -71,12 +71,12 @@ def bornes(periode: str, perso_debut: str = "", perso_fin: str = "",
 def resume_periode(conn: sqlite3.Connection, debut: Optional[str], fin: Optional[str]) -> dict:
     """Chiffre d'affaires, bénéfice et nombre de ventes sur une période."""
     row = conn.execute(
-        """SELECT COALESCE(SUM(total), 0) AS ca, COALESCE(SUM(benefice), 0) AS benefice,
-                  COUNT(*) AS nb_ventes
+        """SELECT COALESCE(SUM(total), 0) AS ca, COALESCE(SUM(cout_total), 0) AS cout,
+                  COALESCE(SUM(benefice), 0) AS benefice, COUNT(*) AS nb_ventes
            FROM ventes WHERE (? IS NULL OR date_vente >= ?) AND (? IS NULL OR date_vente < ?)""",
         (debut, debut, fin, fin)).fetchone()
-    return {"ca": round(row["ca"], 2), "benefice": round(row["benefice"], 2),
-            "nb_ventes": row["nb_ventes"]}
+    return {"ca": round(row["ca"], 2), "cout": round(row["cout"], 2),
+            "benefice": round(row["benefice"], 2), "nb_ventes": row["nb_ventes"]}
 
 
 def resume_standard(conn: sqlite3.Connection, aujourdhui: Optional[date] = None) -> Dict[str, dict]:
@@ -91,6 +91,14 @@ def top_parfums(conn: sqlite3.Connection, n: int = 5) -> List[sqlite3.Row]:
         """SELECT parfum_nom AS nom, COUNT(*) AS nb_ventes, SUM(qnt_parfum_ml) AS total_ml
            FROM lignes_vente GROUP BY parfum_nom ORDER BY nb_ventes DESC, total_ml DESC LIMIT ?""",
         (n,)).fetchall()
+
+
+def top_parfums_benefice(conn: sqlite3.Connection, n: int = 5) -> List[sqlite3.Row]:
+    """Parfums classés par bénéfice total généré (et non par quantité vendue)."""
+    return conn.execute(
+        """SELECT parfum_nom AS nom, COUNT(*) AS nb_ventes, SUM(benefice) AS benefice_total
+           FROM lignes_vente GROUP BY parfum_nom
+           ORDER BY benefice_total DESC, nb_ventes DESC LIMIT ?""", (n,)).fetchall()
 
 
 def top_flacons(conn: sqlite3.Connection, n: int = 5) -> List[sqlite3.Row]:
@@ -114,14 +122,25 @@ def valeur_stock(conn: sqlite3.Connection) -> float:
 
 def lister_logs(conn: sqlite3.Connection, debut: Optional[str], fin: Optional[str],
                 filtre_type: str = "Tous") -> List[sqlite3.Row]:
-    return logs_repo.lister(conn, debut, fin, FILTRES_TYPE.get(filtre_type))
+    """Logs filtrés. Le filtre « Ventes » ne montre que les ventes toujours existantes
+    (une vente supprimée disparaît de cette vue ; elle reste visible dans « Tous »)."""
+    return logs_repo.lister(conn, debut, fin, FILTRES_TYPE.get(filtre_type),
+                            ventes_existantes_seulement=(filtre_type == "Ventes"))
 
 
-def totaux_nets(logs: Sequence[sqlite3.Row]) -> Tuple[float, float]:
-    """(CA net, bénéfice net) des logs affichés : ventes moins ventes supprimées."""
+def totaux_logs(logs: Sequence[sqlite3.Row]) -> dict:
+    """Totaux des logs affichés.
+
+    ca        : ventes nettes (ventes moins ventes supprimées)
+    cout      : dépense nette = coût d'achat des produits vendus (ca - bénéfice)
+    benefice  : bénéfice net
+    achats    : argent dépensé en réapprovisionnement de stock (lignes « Achat »)
+    """
     ca = sum(l["prix"] or 0 for l in logs if l["type"] in ("VENTE", "ANNULATION"))
     benefice = sum(l["benefice"] or 0 for l in logs if l["type"] in ("VENTE", "ANNULATION"))
-    return round(ca, 2), round(benefice, 2)
+    achats = sum(l["prix"] or 0 for l in logs if l["type"] == "ACHAT")
+    return {"ca": round(ca, 2), "cout": round(ca - benefice, 2),
+            "benefice": round(benefice, 2), "achats": round(achats, 2)}
 
 
 def _csv_nombre(valeur) -> str:

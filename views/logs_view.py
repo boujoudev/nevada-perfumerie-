@@ -63,10 +63,11 @@ class LogsView(ctk.CTkFrame):
         self.tableau = Tableau(parent, COLONNES)
         self.tableau.grid(row=1, column=0, sticky="nsew")
 
+        self.lbl_totaux = ctk.CTkLabel(parent, text="", anchor="w", justify="left", wraplength=1000,
+                                       font=ctk.CTkFont(weight="bold"))
+        self.lbl_totaux.grid(row=2, column=0, sticky="w", pady=(8, 2))
         bas = ctk.CTkFrame(parent, fg_color="transparent")
-        bas.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        self.lbl_totaux = ctk.CTkLabel(bas, text="", anchor="w", font=ctk.CTkFont(weight="bold"))
-        self.lbl_totaux.pack(side="left")
+        bas.grid(row=3, column=0, sticky="ew", pady=(2, 0))
         ctk.CTkButton(bas, text="Exporter en CSV", width=140, command=self._exporter).pack(side="right", padx=4)
         ctk.CTkButton(bas, text="Supprimer la vente sélectionnée", width=220, fg_color="#dc2626",
                       hover_color="#b91c1c", command=self._supprimer_vente).pack(side="right", padx=4)
@@ -91,9 +92,13 @@ class LogsView(ctk.CTkFrame):
                  fmt_nombre(l["quantite"]), fmt_prix(l["prix"]) if l["prix"] is not None else "",
                  fmt_prix(l["benefice"]) if l["benefice"] is not None else "", l["details"] or ""),
                 iid=str(l["id"]), tags=("annulation",) if l["type"] == "ANNULATION" else ())
-        ca, benefice = stats_service.totaux_nets(self._logs)
-        self.lbl_totaux.configure(
-            text=f"{len(self._logs)} ligne(s) — Ventes nettes : {fmt_prix(ca)} — Bénéfice net : {fmt_prix(benefice)}")
+        t = stats_service.totaux_logs(self._logs)
+        texte = (f"{len(self._logs)} ligne(s)  —  Ventes nettes : {fmt_prix(t['ca'])}  —  "
+                 f"Dépense nette (coût des produits vendus) : {fmt_prix(t['cout'])}  —  "
+                 f"Bénéfice net : {fmt_prix(t['benefice'])}")
+        if t["achats"]:
+            texte += f"  —  Achats de stock : {fmt_prix(t['achats'])}"
+        self.lbl_totaux.configure(text=texte)
 
     def _exporter(self) -> None:
         if not self._logs:
@@ -136,45 +141,53 @@ class LogsView(ctk.CTkFrame):
 
     # ------------------------------------------------------------ statistiques
     def _construire_stats(self, parent) -> None:
-        parent.grid_columnconfigure((0, 1), weight=1)
+        parent.grid_columnconfigure((0, 1, 2), weight=1)
         tableau = ctk.CTkFrame(parent)
-        tableau.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(5, 10))
-        tableau.grid_columnconfigure((0, 1, 2, 3), weight=1)
-        for col, titre in enumerate(("", "Chiffre d'affaires", "Bénéfice", "Nombre de ventes")):
+        tableau.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(5, 10))
+        tableau.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
+        titres = ("", "Chiffre d'affaires", "Dépense (coût des produits vendus)", "Bénéfice", "Nombre de ventes")
+        for col, titre in enumerate(titres):
             ctk.CTkLabel(tableau, text=titre, font=ctk.CTkFont(weight="bold")).grid(
                 row=0, column=col, padx=10, pady=8, sticky="w" if col == 0 else "e")
         self.cellules = {}
         for ligne, periode in enumerate(("Aujourd'hui", "Ce mois", "Cette année"), start=1):
             ctk.CTkLabel(tableau, text=periode, anchor="w").grid(row=ligne, column=0, padx=10, pady=6, sticky="w")
-            for col in (1, 2, 3):
+            for col in (1, 2, 3, 4):
                 lbl = ctk.CTkLabel(tableau, text="", anchor="e", font=ctk.CTkFont(size=15))
                 lbl.grid(row=ligne, column=col, padx=10, pady=6, sticky="e")
                 self.cellules[(periode, col)] = lbl
         self.lbl_valeur_stock = ctk.CTkLabel(parent, text="", font=ctk.CTkFont(size=16, weight="bold"))
-        self.lbl_valeur_stock.grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=8)
+        self.lbl_valeur_stock.grid(row=1, column=0, columnspan=3, sticky="w", padx=10, pady=8)
         self.lbl_top_parfums = ctk.CTkLabel(parent, text="", justify="left", anchor="nw")
         self.lbl_top_parfums.grid(row=2, column=0, sticky="nw", padx=10, pady=8)
+        self.lbl_top_benefice = ctk.CTkLabel(parent, text="", justify="left", anchor="nw")
+        self.lbl_top_benefice.grid(row=2, column=1, sticky="nw", padx=10, pady=8)
         self.lbl_top_flacons = ctk.CTkLabel(parent, text="", justify="left", anchor="nw")
-        self.lbl_top_flacons.grid(row=2, column=1, sticky="nw", padx=10, pady=8)
+        self.lbl_top_flacons.grid(row=2, column=2, sticky="nw", padx=10, pady=8)
 
     def charger_stats(self) -> None:
         try:
             for periode, valeurs in stats_service.resume_standard(self.conn).items():
                 self.cellules[(periode, 1)].configure(text=fmt_prix(valeurs["ca"]))
-                self.cellules[(periode, 2)].configure(text=fmt_prix(valeurs["benefice"]))
-                self.cellules[(periode, 3)].configure(text=str(valeurs["nb_ventes"]))
+                self.cellules[(periode, 2)].configure(text=fmt_prix(valeurs["cout"]))
+                self.cellules[(periode, 3)].configure(text=fmt_prix(valeurs["benefice"]))
+                self.cellules[(periode, 4)].configure(text=str(valeurs["nb_ventes"]))
             self.lbl_valeur_stock.configure(
                 text=f"Valeur du stock actuel (prix d'achat) : {fmt_prix(stats_service.valeur_stock(self.conn))}")
             parfums = stats_service.top_parfums(self.conn)
+            parfums_benefice = stats_service.top_parfums_benefice(self.conn)
             flacons = stats_service.top_flacons(self.conn)
         except sqlite3.Error as erreur:
             journal.exception("Statistiques")
             afficher_erreur(self, f"Erreur de base de données : {erreur}")
             return
-        self.lbl_top_parfums.configure(text="Top 5 parfums\n" + (
+        self.lbl_top_parfums.configure(text="Top 5 parfums — les plus vendus\n" + (
             "\n".join(f"{i}. {p['nom']} — {p['nb_ventes']} vente(s), {fmt_nombre(p['total_ml'])} ml"
                       for i, p in enumerate(parfums, 1)) or "Aucune vente"))
-        self.lbl_top_flacons.configure(text="Top 5 flacons\n" + (
+        self.lbl_top_benefice.configure(text="Top 5 parfums — meilleur bénéfice\n" + (
+            "\n".join(f"{i}. {p['nom']} — {fmt_prix(p['benefice_total'])} ({p['nb_ventes']} vente(s))"
+                      for i, p in enumerate(parfums_benefice, 1)) or "Aucune vente"))
+        self.lbl_top_flacons.configure(text="Top 5 flacons — les plus vendus\n" + (
             "\n".join(f"{i}. {f['nom']} — {f['nb_ventes']} vente(s)"
                       for i, f in enumerate(flacons, 1)) or "Aucune vente"))
 

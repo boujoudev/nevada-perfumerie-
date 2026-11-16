@@ -124,7 +124,7 @@ def installer():
     ttk.Treeview, ttk.Scrollbar, ttk.Style = Treeview, Faux, Faux
     tk = types.ModuleType("tkinter")
     tk.ttk, tk.messagebox, tk.filedialog = ttk, messages, Faux()
-    tk.Tk = Faux
+    tk.Tk = tk.PhotoImage = Faux
     ctk = types.ModuleType("customtkinter")
     for nom in ("CTk", "CTkFrame", "CTkToplevel", "CTkLabel", "CTkButton", "CTkEntry",
                 "CTkOptionMenu", "CTkCheckBox", "CTkTextbox", "CTkTabview",

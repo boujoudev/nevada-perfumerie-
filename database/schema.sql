@@ -16,6 +16,7 @@ PRAGMA foreign_keys = ON;
 -- ------------------------- PRODUITS -------------------------
 
 CREATE TABLE IF NOT EXISTS flacons (
+    code                  TEXT,   -- ID choisi par l'utilisateur (unique, voir index créés au démarrage)
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     nom                   TEXT    NOT NULL CHECK (length(trim(nom)) > 0),
     capacite_ml           REAL    NOT NULL CHECK (capacite_ml > 0),
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS flacons (
 );
 
 CREATE TABLE IF NOT EXISTS parfums (
+    code                  TEXT,   -- ID choisi par l'utilisateur (unique, voir index créés au démarrage)
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     nom               TEXT    NOT NULL CHECK (length(trim(nom)) > 0),
     prix_achat_100ml  REAL    NOT NULL DEFAULT 0 CHECK (prix_achat_100ml >= 0),
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS parfums (
 );
 
 CREATE TABLE IF NOT EXISTS alcools (
+    code                  TEXT,   -- ID choisi par l'utilisateur (unique, voir index créés au démarrage)
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     nom               TEXT    NOT NULL CHECK (length(trim(nom)) > 0),
     prix_achat_litre  REAL    NOT NULL DEFAULT 0 CHECK (prix_achat_litre >= 0),
@@ -135,7 +138,7 @@ INSERT OR IGNORE INTO parametres (cle, valeur) VALUES
     ('devise', 'DA'),
     ('mot_de_passe_hash', ''),
     ('mot_de_passe_sel', ''),
-    ('schema_version', '3');
+    ('schema_version', '4');
 
 -- -------------------------- INDEX ---------------------------
 
