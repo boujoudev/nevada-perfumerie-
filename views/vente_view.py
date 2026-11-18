@@ -14,6 +14,7 @@ from services import clients_service, vente_service
 from utils.erreurs import ErreurMetier
 from utils.formatage import fmt_nombre, fmt_prix, parse_nombre
 from views.dialogues import DialogueClient
+from views.session_ui import assurer_session, etat_session, ouvrir_ma_session
 from views.style import ROUGE, VERT
 from views.widgets import (Tableau, afficher_avertissement, afficher_erreur, afficher_info,
                            confirmer)
@@ -110,9 +111,10 @@ class VenteView(ctk.CTkFrame):
                 ("ml", "Parfum (ml)", 90, "e"), ("alcool", "Alcool (ml)", 90, "e"),
                 ("prix", "Prix", 120, "e"), ("benefice", "Bénéfice", 120, "e")]
 
-    def __init__(self, master, conn: sqlite3.Connection):
+    def __init__(self, master, conn: sqlite3.Connection, ctx=None):
         super().__init__(master, fg_color="transparent")
         self.conn = conn
+        self.ctx = ctx                            # utilisateur connecté (None dans les tests simples)
         self.ligne: Optional[dict] = None        # combinaison en cours de composition
         self.panier: List[dict] = []
         self._clients: Dict[str, Optional[int]] = {}
@@ -122,6 +124,12 @@ class VenteView(ctk.CTkFrame):
 
         ctk.CTkLabel(self, text="Vente", font=ctk.CTkFont(size=24, weight="bold")
                      ).grid(row=0, column=0, sticky="w", padx=20, pady=(15, 5))
+        entete = ctk.CTkFrame(self, fg_color="transparent")
+        entete.grid(row=0, column=1, sticky="e", padx=20, pady=(15, 5))
+        self.btn_session = ctk.CTkButton(entete, text="Ouvrir ma session", width=160, command=self._ouvrir_session)
+        self.btn_session.pack(side="right")
+        self.lbl_session = ctk.CTkLabel(entete, text="", font=ctk.CTkFont(weight="bold"))
+        self.lbl_session.pack(side="right", padx=10)
 
         # ---------------------------- colonne gauche : choix des produits
         gauche = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -200,6 +208,7 @@ class VenteView(ctk.CTkFrame):
 
     # ------------------------------------------------------------ rafraîchir
     def rafraichir(self) -> None:
+        self._maj_bandeau()
         self._charger_clients()
         self.choix_flacon.recharger()
         self.choix_parfum.recharger()
@@ -334,8 +343,11 @@ class VenteView(ctk.CTkFrame):
                     "alcool_id": l["alcool_id"], "flacon_client": l["flacon_client"],
                     "prix_final": l["prix_final"]} for l in self.panier]
         client_id = self._clients.get(self.var_client.get())
+        if self.ctx is not None and not assurer_session(self.ctx, self, lambda _id: self._maj_bandeau()):
+            return                                  # pas de session ouverte : on propose d'en ouvrir une
         try:
-            resultat = vente_service.valider_vente(self.conn, saisies, client_id)
+            resultat = vente_service.valider_vente(
+                self.conn, saisies, client_id, utilisateur=self.ctx.utilisateur if self.ctx else None)
         except ErreurMetier as erreur:
             afficher_erreur(self, str(erreur))
             return
@@ -354,3 +366,22 @@ class VenteView(ctk.CTkFrame):
         self._afficher_panier()
         self.var_flacon_client.set(False)
         self.rafraichir()
+
+    # --------------------------------------------------------------- session
+    def _maj_bandeau(self) -> None:
+        if self.ctx is None:
+            self.btn_session.pack_forget()
+            return
+        texte, couleur, besoin = etat_session(self.ctx)
+        self.lbl_session.configure(text=texte, text_color=couleur)
+        if besoin:
+            self.btn_session.pack(side="right")
+        else:
+            self.btn_session.pack_forget()
+
+    def _ouvrir_session(self) -> None:
+        if self.ctx is not None:
+            ouvrir_ma_session(self.ctx, self, lambda _id: self._maj_bandeau())
+
+    def panier_en_cours(self) -> bool:
+        return bool(self.panier)

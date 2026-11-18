@@ -24,7 +24,7 @@ from typing import Iterator, Optional
 NOM_APP = "GestionParfumerie"
 NOM_FICHIER_DB = "parfumerie.db"
 NB_SAUVEGARDES_MAX = 10
-VERSION_SCHEMA = 4
+VERSION_SCHEMA = 5
 TABLES_PRODUITS = (("flacons", "F"), ("parfums", "P"), ("alcools", "A"))
 
 
@@ -113,6 +113,19 @@ def _creer_index_codes(conn: sqlite3.Connection) -> None:
         conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_code ON {table}(code COLLATE NOCASE)")
 
 
+def _migrer_mot_de_passe(conn: sqlite3.Connection) -> None:
+    """L'ancien mot de passe unique (s'il existait) devient celui de l'administrateur « admin »."""
+    if conn.execute("SELECT COUNT(*) FROM utilisateurs").fetchone()[0]:
+        return
+    lignes = {r["cle"]: r["valeur"] for r in conn.execute(
+        "SELECT cle, valeur FROM parametres WHERE cle IN ('mot_de_passe_hash', 'mot_de_passe_sel')")}
+    if lignes.get("mot_de_passe_hash") and lignes.get("mot_de_passe_sel"):
+        conn.execute(
+            "INSERT INTO utilisateurs (nom, identifiant, mot_de_passe_hash, mot_de_passe_sel, role) "
+            "VALUES ('Administrateur', 'admin', ?, ?, 'ADMIN')",
+            (lignes["mot_de_passe_hash"], lignes["mot_de_passe_sel"]))
+
+
 def _colonnes(conn: sqlite3.Connection, table: str) -> set:
     return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -121,6 +134,8 @@ def _migrer(conn: sqlite3.Connection) -> None:
     """Met à niveau une base créée avec une ancienne version de l'application.
 
     v1 -> v2 : prix de l'alcool au ml -> au litre (valeurs x 1000).
+    v4 -> v5 : utilisateurs + sessions de caisse + module cosmétique ; le mot de passe unique devient
+               celui de l'utilisateur ADMIN « admin » ; ventes et logs parfum gardent qui/quelle session.
     v3 -> v4 : ID personnalisable (colonne code) ; les produits existants gardent leur ID affiché (F-1...).
     v2 -> v3 : prix du parfum au ml / 10 ml -> pour 100 ml. Les nombres déjà saisis sont
                conservés tels quels : ils étaient destinés à être des prix pour 100 ml.
@@ -143,6 +158,18 @@ def _migrer(conn: sqlite3.Connection) -> None:
                 if "code" not in _colonnes(conn, table):
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN code TEXT")
                 conn.execute(f"UPDATE {table} SET code = '{prefixe}-' || id WHERE code IS NULL AND actif = 1")
+        if version < 5:
+            definitions = {
+                "ventes": ("utilisateur_id INTEGER REFERENCES utilisateurs(id)",
+                           "session_id INTEGER REFERENCES sessions_caisse(id)"),
+                "logs": ("utilisateur_id INTEGER REFERENCES utilisateurs(id)", "session_id INTEGER"),
+            }
+            for table, colonnes_a_ajouter in definitions.items():
+                existantes = _colonnes(conn, table)
+                for definition in colonnes_a_ajouter:
+                    if definition.split()[0] not in existantes:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+            _migrer_mot_de_passe(conn)
         conn.execute("INSERT OR REPLACE INTO parametres (cle, valeur) VALUES ('schema_version', ?)",
                      (str(VERSION_SCHEMA),))
 

@@ -25,6 +25,7 @@ echo [4/4] Construction de l'application...
 pyinstaller --noconfirm --clean --windowed --name GestionParfumerie ^
     --icon assets\icone.ico ^
     --collect-all customtkinter ^
+    --hidden-import openpyxl ^
     --add-data "database\schema.sql;database" ^
     --add-data "assets;assets" ^
     main.py

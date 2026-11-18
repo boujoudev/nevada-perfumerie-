@@ -10,13 +10,14 @@ def ajouter(conn: sqlite3.Connection, type_log: str, produit_type: Optional[str]
             produit_id: Optional[int] = None, produit_nom: Optional[str] = None,
             quantite: Optional[float] = None, prix: Optional[float] = None,
             benefice: Optional[float] = None, vente_id: Optional[int] = None,
-            details: Optional[str] = None) -> int:
+            details: Optional[str] = None, utilisateur_id: Optional[int] = None,
+            session_id: Optional[int] = None) -> int:
     return conn.execute(
         """INSERT INTO logs (type, produit_type, produit_id, produit_nom, quantite,
-                             prix, benefice, vente_id, details)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                             prix, benefice, vente_id, details, utilisateur_id, session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (type_log, produit_type, produit_id, produit_nom, quantite, prix,
-         benefice, vente_id, details),
+         benefice, vente_id, details, utilisateur_id, session_id),
     ).lastrowid
 
 
@@ -26,13 +27,14 @@ def lister(conn: sqlite3.Connection, debut: Optional[str], fin: Optional[str],
 
     ventes_existantes_seulement : les lignes « Vente » dont la vente a été supprimée sont masquées.
     """
-    sql = ("SELECT * FROM logs WHERE (? IS NULL OR date_log >= ?) "
-           "AND (? IS NULL OR date_log < ?)")
+    sql = ("SELECT logs.*, u.nom AS utilisateur_nom FROM logs LEFT JOIN utilisateurs u "
+           "ON u.id = logs.utilisateur_id WHERE (? IS NULL OR logs.date_log >= ?) "
+           "AND (? IS NULL OR logs.date_log < ?)")
     params: list = [debut, debut, fin, fin]
     if types:
-        sql += f" AND type IN ({', '.join('?' for _ in types)})"
+        sql += f" AND logs.type IN ({', '.join('?' for _ in types)})"
         params.extend(types)
     if ventes_existantes_seulement:
-        sql += " AND (type != 'VENTE' OR vente_id IN (SELECT id FROM ventes))"
-    sql += " ORDER BY date_log DESC, id DESC"
+        sql += " AND (logs.type != 'VENTE' OR logs.vente_id IN (SELECT id FROM ventes))"
+    sql += " ORDER BY logs.date_log DESC, logs.id DESC"
     return conn.execute(sql, params).fetchall()

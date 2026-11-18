@@ -13,7 +13,9 @@ from utils.erreurs import ErreurMetier
 LIBELLES_TYPE = {
     "VENTE": "Vente", "ACHAT": "Achat", "ANNULATION": "Annulation",
     "CREATION": "Création", "MODIFICATION": "Modification",
-    "SUPPRESSION": "Suppression", "AJUSTEMENT": "Ajustement",
+    "SUPPRESSION": "Suppression", "AJUSTEMENT": "Ajustement", "RETOUR": "Retour", "IMPORT": "Import",
+    "OUVERTURE": "Ouverture caisse", "PAUSE": "Pause caisse", "REPRISE": "Reprise caisse",
+    "CLOTURE": "Clôture caisse", "MOUVEMENT_CAISSE": "Mouvement de caisse", "CONNEXION": "Connexion",
 }
 
 FILTRES_TYPE: Dict[str, Optional[Tuple[str, ...]]] = {
@@ -152,16 +154,21 @@ def _csv_nombre(valeur) -> str:
 
 def exporter_csv(chemin: str, logs: Sequence[sqlite3.Row]) -> int:
     """Écrit un CSV lisible par Excel (séparateur ';', UTF-8 avec BOM). Retourne le nombre de lignes."""
+    avec_utilisateur = bool(logs) and "utilisateur_nom" in logs[0].keys()
     try:
         with open(chemin, "w", newline="", encoding="utf-8-sig") as fichier:
             ecrivain = csv.writer(fichier, delimiter=";")
-            ecrivain.writerow(["Date/Heure", "Type", "Produit", "Quantité", "Prix (DA)",
-                               "Bénéfice (DA)", "Détails"])
+            entetes = ["Date/Heure", "Type", "Produit", "Quantité", "Prix (DA)", "Bénéfice (DA)", "Détails"]
+            if avec_utilisateur:
+                entetes.insert(2, "Utilisateur")
+            ecrivain.writerow(entetes)
             for l in logs:
-                ecrivain.writerow([l["date_log"], LIBELLES_TYPE.get(l["type"], l["type"]),
-                                   l["produit_nom"] or "", _csv_nombre(l["quantite"]),
-                                   _csv_nombre(l["prix"]), _csv_nombre(l["benefice"]),
-                                   l["details"] or ""])
+                ligne = [l["date_log"], LIBELLES_TYPE.get(l["type"], l["type"]),
+                         l["produit_nom"] or "", _csv_nombre(l["quantite"]),
+                         _csv_nombre(l["prix"]), _csv_nombre(l["benefice"]), l["details"] or ""]
+                if avec_utilisateur:
+                    ligne.insert(2, l["utilisateur_nom"] or "")
+                ecrivain.writerow(ligne)
     except OSError as erreur:
         raise ErreurMetier(
             f"Impossible d'écrire le fichier (est-il ouvert dans Excel ?) : {erreur}") from None

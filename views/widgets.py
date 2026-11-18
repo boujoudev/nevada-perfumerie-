@@ -56,6 +56,12 @@ class Tableau(ctk.CTkFrame):
     def ajouter(self, valeurs: Sequence, iid: Optional[str] = None, tags: Sequence[str] = ()) -> None:
         self.arbre.insert("", "end", iid=iid, values=list(valeurs), tags=tuple(tags))
 
+    def selectionner(self, iid: str) -> None:
+        """Sélectionne (et rend visible) la ligne portant cet identifiant."""
+        if iid in self.arbre.get_children():
+            self.arbre.selection_set(iid)
+            self.arbre.see(iid)
+
     def selection(self) -> Optional[str]:
         choix = self.arbre.selection()
         return choix[0] if choix else None
@@ -133,6 +139,39 @@ class FormulaireProduit(ctk.CTkFrame):
             entree.delete(0, "end")
             entree.insert(0, self.type.code_de(ligne) if champ.cle == "code" else fmt_brut(ligne[champ.cle]))
         self._maj_alcool()
+
+    def valeurs(self) -> Dict[str, str]:
+        return {cle: entree.get() for cle, entree in self.entrees.items()}
+
+
+class FormulaireChamps(ctk.CTkFrame):
+    """Formulaire générique : un champ de saisie par `Champ` (cosmétiques, utilisateurs...)."""
+
+    def __init__(self, master, champs, largeur: int = 300):
+        super().__init__(master, fg_color="transparent")
+        self.champs = champs
+        self.entrees: Dict[str, ctk.CTkEntry] = {}
+        self.grid_columnconfigure(1, weight=1)
+        for ligne, champ in enumerate(champs):
+            ctk.CTkLabel(self, text=champ.libelle, anchor="w").grid(
+                row=ligne, column=0, padx=(10, 12), pady=6, sticky="w")
+            entree = ctk.CTkEntry(self, width=largeur)
+            entree.grid(row=ligne, column=1, padx=10, pady=6, sticky="ew")
+            self.entrees[champ.cle] = entree
+        self.vider()
+
+    def vider(self) -> None:
+        for champ in self.champs:
+            entree = self.entrees[champ.cle]
+            entree.delete(0, "end")
+            if champ.defaut is not None:
+                entree.insert(0, champ.defaut)
+
+    def remplir(self, valeurs: dict) -> None:
+        for champ in self.champs:
+            entree = self.entrees[champ.cle]
+            entree.delete(0, "end")
+            entree.insert(0, fmt_brut(valeurs.get(champ.cle)))
 
     def valeurs(self) -> Dict[str, str]:
         return {cle: entree.get() for cle, entree in self.entrees.items()}

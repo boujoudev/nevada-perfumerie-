@@ -13,6 +13,7 @@ class Faux:
     """Widget factice : accepte n'importe quel appel de méthode."""
 
     def __init__(self, *args, **kwargs):
+        self.master = args[0] if args else None
         self._valeur = ""
         self._options = dict(kwargs)
         self._variable = kwargs.get("variable")

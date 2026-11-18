@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import connection as db  # noqa: E402
-from services import (auth_service, clients_service, produits_service as ps,  # noqa: E402
+from services import (clients_service, produits_service as ps,  # noqa: E402
                       stats_service as st, vente_service as vs)
 from utils.erreurs import ErreurMetier  # noqa: E402
 from utils.formatage import fmt_nombre, fmt_prix, parse_nombre  # noqa: E402
@@ -410,27 +410,12 @@ class TestStatsEtExport(BaseTest):
         self.assertEqual(st.exporter_csv(chemin, logs), 1)
         with open(chemin, encoding="utf-8-sig", newline="") as f:
             lignes = list(csv.reader(f, delimiter=";"))
-        self.assertEqual(lignes[0][:3], ["Date/Heure", "Type", "Produit"])
+        self.assertEqual(lignes[0][:4], ["Date/Heure", "Type", "Utilisateur", "Produit"])
         self.assertEqual(lignes[1][1], "Vente")
-        self.assertEqual(lignes[1][4], "600")
-        self.assertEqual(lignes[1][5], "332,5")
+        self.assertEqual(lignes[1][5], "600")
+        self.assertEqual(lignes[1][6], "332,5")
         with self.assertRaises(ErreurMetier):
             st.exporter_csv(os.path.join(self._tmp.name, "dossier_inexistant", "x.csv"), logs)
-
-
-class TestAuth(BaseTest):
-    def test_cycle_mot_de_passe(self):
-        self.assertFalse(auth_service.a_mot_de_passe(self.conn))
-        with self.assertRaises(ErreurMetier):
-            auth_service.definir_mot_de_passe(self.conn, "abc", "abc")        # trop court
-        with self.assertRaises(ErreurMetier):
-            auth_service.definir_mot_de_passe(self.conn, "secret1", "secret2")
-        auth_service.definir_mot_de_passe(self.conn, "secret1", "secret1")
-        self.assertTrue(auth_service.a_mot_de_passe(self.conn))
-        self.assertTrue(auth_service.verifier_mot_de_passe(self.conn, "secret1"))
-        self.assertFalse(auth_service.verifier_mot_de_passe(self.conn, "faux"))
-        auth_service.supprimer_mot_de_passe(self.conn)
-        self.assertFalse(auth_service.a_mot_de_passe(self.conn))
 
 
 class TestClients(BaseTest):

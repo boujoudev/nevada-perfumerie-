@@ -193,7 +193,7 @@ class TestMigration(BaseTestCase):
         ligne = conn.execute("SELECT prix_achat_litre, prix_vente_litre FROM alcools").fetchone()
         self.assertEqual((ligne[0], ligne[1]), (500, 1000))
         version = conn.execute("SELECT valeur FROM parametres WHERE cle='schema_version'").fetchone()[0]
-        self.assertEqual(version, "4")
+        self.assertEqual(version, "5")
         conn.close()
         db.ouvrir_base().connexion.close()       # idempotent : pas de 2e conversion
         conn = db.creer_connexion()
@@ -238,6 +238,36 @@ class TestMigration(BaseTestCase):
         self.assertIsNone(conn.execute("SELECT code FROM parfums WHERE actif = 0").fetchone()[0])
         with self.assertRaises(sqlite3.IntegrityError):               # index unique actif
             conn.execute("INSERT INTO parfums (nom, code) VALUES ('Autre', 'p-1')")   # insensible à la casse
+        conn.close()
+
+
+    def test_migration_v4_utilisateurs_et_mot_de_passe(self):
+        """Une base v4 (anciennes tables ventes/logs, mot de passe unique) est mise à niveau."""
+        chemin = db.chemin_base()
+        ancien = sqlite3.connect(str(chemin))
+        ancien.executescript("""
+            CREATE TABLE parametres (cle TEXT PRIMARY KEY, valeur TEXT NOT NULL);
+            INSERT INTO parametres VALUES ('schema_version', '4'), ('devise', 'DA'),
+                ('mot_de_passe_hash', 'abc123hash'), ('mot_de_passe_sel', 'abc123sel');
+            CREATE TABLE ventes (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER,
+                date_vente TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                total REAL NOT NULL DEFAULT 0, cout_total REAL NOT NULL DEFAULT 0,
+                benefice REAL NOT NULL DEFAULT 0, note TEXT);
+            CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date_log TEXT NOT NULL DEFAULT (datetime('now','localtime')), type TEXT NOT NULL,
+                produit_type TEXT, produit_id INTEGER, produit_nom TEXT, quantite REAL, prix REAL,
+                benefice REAL, vente_id INTEGER, details TEXT);
+            INSERT INTO ventes (total) VALUES (500);
+        """)
+        ancien.close()
+        conn = db.ouvrir_base().connexion
+        colonnes = {r["name"] for r in conn.execute("PRAGMA table_info(ventes)")}
+        self.assertTrue({"utilisateur_id", "session_id"} <= colonnes)
+        self.assertEqual(conn.execute("SELECT total FROM ventes").fetchone()[0], 500)      # rien perdu
+        admin = conn.execute("SELECT * FROM utilisateurs").fetchone()
+        self.assertEqual((admin["identifiant"], admin["role"], admin["mot_de_passe_hash"]),
+                         ("admin", "ADMIN", "abc123hash"))
+        self.assertTrue(conn.execute("SELECT 1 FROM sqlite_master WHERE name='produits_caisse'").fetchone())
         conn.close()
 
 

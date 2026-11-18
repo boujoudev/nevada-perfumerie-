@@ -18,15 +18,16 @@ from views.widgets import Tableau, afficher_erreur, afficher_info, confirmer
 journal = logging.getLogger(__name__)
 
 COLONNES = [("date", "Date/Heure", 140, "center"), ("type", "Type", 100, "center"),
-            ("produit", "Produit", 300, "w"), ("qte", "Quantité", 90, "e"),
+            ("employe", "Employé", 100, "w"), ("produit", "Produit", 260, "w"), ("qte", "Quantité", 80, "e"),
             ("prix", "Prix", 120, "e"), ("benefice", "Bénéfice", 120, "e"),
             ("details", "Détails", 330, "w")]
 
 
 class LogsView(ctk.CTkFrame):
-    def __init__(self, master, conn: sqlite3.Connection):
+    def __init__(self, master, conn: sqlite3.Connection, ctx=None):
         super().__init__(master, fg_color="transparent")
         self.conn = conn
+        self.ctx = ctx
         self._logs: List[sqlite3.Row] = []
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -88,7 +89,7 @@ class LogsView(ctk.CTkFrame):
         for l in self._logs:
             libelle = stats_service.LIBELLES_TYPE.get(l["type"], l["type"])
             self.tableau.ajouter(
-                (fmt_datetime(l["date_log"]), libelle, l["produit_nom"] or "",
+                (fmt_datetime(l["date_log"]), libelle, l["utilisateur_nom"] or "", l["produit_nom"] or "",
                  fmt_nombre(l["quantite"]), fmt_prix(l["prix"]) if l["prix"] is not None else "",
                  fmt_prix(l["benefice"]) if l["benefice"] is not None else "", l["details"] or ""),
                 iid=str(l["id"]), tags=("annulation",) if l["type"] == "ANNULATION" else ())
@@ -131,7 +132,7 @@ class LogsView(ctk.CTkFrame):
                                "et la suppression sera enregistrée dans les logs."):
             return
         try:
-            vente_service.supprimer_vente(self.conn, log["vente_id"])
+            vente_service.supprimer_vente(self.conn, log["vente_id"], self.ctx.utilisateur if self.ctx else None)
         except ErreurMetier as erreur:
             afficher_erreur(self, str(erreur))
         except sqlite3.Error as erreur:

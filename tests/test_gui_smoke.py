@@ -1,4 +1,4 @@
-"""Test de fumée des écrans (avec faux widgets) : scénario complet de bout en bout."""
+"""Test de fumée des écrans (faux widgets) : parcours complet de l'application."""
 
 import os
 import sys
@@ -14,9 +14,12 @@ import gui_stubs  # noqa: E402
 gui_stubs.installer()
 
 from database import connection as db  # noqa: E402
-from views.dialogues import (DialogueClient, DialogueConnexion, DialogueDetails,  # noqa: E402
-                             DialogueModifier, DialogueReappro)
-from views.main_window import FenetrePrincipale  # noqa: E402
+from services import session_service as ss, utilisateurs_service as us  # noqa: E402
+from views.application import Application  # noqa: E402
+from views.dialogues import DialogueModifier  # noqa: E402
+from views.dialogues_caisse import DialogueAttentes, DialogueProduitCaisse  # noqa: E402
+from views.dialogues_session import DialogueCloture, DialogueMouvement, DialogueOuvertureSession  # noqa: E402
+from views.dialogues_utilisateurs import DialogueUtilisateur, DialogueUtilisateurs  # noqa: E402
 
 
 def saisir(entree, texte):
@@ -24,180 +27,328 @@ def saisir(entree, texte):
     entree.insert(0, texte)
 
 
-class TestEcrans(unittest.TestCase):
+class BaseGui(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         os.environ["PARFUMERIE_DATA_DIR"] = self._tmp.name
         gui_stubs.messages.reinitialiser()
         self.conn = db.ouvrir_base().connexion
-        self.app = FenetrePrincipale(self.conn)
+        self.app = Application(self.conn)
         self.app._demarrer()
+        self.m = gui_stubs.messages
 
     def tearDown(self):
         self.conn.close()
         os.environ.pop("PARFUMERIE_DATA_DIR", None)
         self._tmp.cleanup()
 
+    def premier_admin(self):
+        """Premier lancement : création du compte administrateur -> accueil."""
+        vue = self.app._vue
+        saisir(vue.nom, "Boss")
+        saisir(vue.mot_de_passe, "1234")
+        saisir(vue.confirmation, "1234")
+        vue._creer()
+        self.assertEqual(self.m.erreurs, [])
+        self.assertEqual(self.app.ctx.utilisateur["role"], "ADMIN")
+
+    def ouvrir_session(self, fond="1000"):
+        dialogue = DialogueOuvertureSession(self.app, self.app.ctx, None)
+        saisir(dialogue.entree, fond)
+        dialogue._ouvrir()
+        self.assertEqual(self.m.erreurs, [])
+
     def remplir(self, formulaire, valeurs):
         for cle, texte in valeurs.items():
             saisir(formulaire.entrees[cle], texte)
 
-    def creer_catalogue(self):
-        creation = self.app.vues["Création"]
-        self.remplir(creation.formulaires["FLACON"], {
-            "nom": "Carré 50ml", "capacite_ml": "50", "prix_achat": "100",
-            "quantite_stock": "10", "qnt_parfum_necessaire": "15"})
-        creation._creer("FLACON")
-        self.remplir(creation.formulaires["PARFUM"], {
-            "nom": "Rose de Mai", "prix_achat_100ml": "1000",
-            "quantite_stock_ml": "500"})
-        creation._creer("PARFUM")
-        self.remplir(creation.formulaires["ALCOOL"], {
-            "nom": "Alcool 96°", "prix_achat_litre": "500",
-            "quantite_stock_ml": "5000"})
-        creation._creer("ALCOOL")
+    def stock(self, table, col, id_=1):
+        return self.conn.execute(f"SELECT {col} FROM {table} WHERE id=?", (id_,)).fetchone()[0]
 
-    def test_scenario_complet(self):
-        m = gui_stubs.messages
-        # 1. Création des 3 produits
-        self.creer_catalogue()
-        self.assertEqual(m.erreurs, [])
-        self.assertEqual(len(m.infos), 3)
 
-        # 2. Stock
-        stock = self.app.vues["Stock"]
-        self.app.afficher("Stock")
-        self.assertEqual(len(stock.tableau.arbre.lignes), 3)
-        saisir(stock.recherche, "rose")
+class TestConnexionEtAccueil(BaseGui):
+    def test_premier_demarrage_puis_connexion(self):
+        self.assertFalse(us.a_des_utilisateurs(self.conn))
+        self.premier_admin()
+        self.assertEqual(us.lister_utilisateurs(self.conn)[0]["identifiant"], "admin")
+        # déconnexion -> écran de connexion
+        self.app.deconnecter()
+        login = self.app._vue
+        saisir(login.identifiant, "admin")
+        saisir(login.mot_de_passe, "faux")
+        login._valider()
+        self.assertIsNone(self.app.ctx.utilisateur)
+        self.assertIn("incorrect", login.message.cget("text"))
+        saisir(login.mot_de_passe, "1234")
+        login._valider()
+        self.assertEqual(self.app.ctx.utilisateur["nom"], "Boss")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM logs_caisse WHERE type='CONNEXION'").fetchone()[0], 2)
+
+    def test_les_deux_modules_et_le_bouton_retour(self):
+        self.premier_admin()
+        self.app.ouvrir_module("PARFUM")
+        self.assertEqual(set(self.app.modules["PARFUM"].vues), {"Création", "Stock", "Vente", "Logs", "Session", "Paramètres"})
+        self.app.ouvrir_module("COSMETIQUE")
+        self.assertEqual(set(self.app.modules["COSMETIQUE"].vues), {"Caisse", "Retours", "Stock", "Logs", "Session"})
+        self.app.modules["PARFUM"].retour_accueil()              # le bouton « Retour à l'accueil »
+        self.assertNotIn(self.app._vue, self.app.modules.values())
+        self.assertEqual(self.m.erreurs, [])
+
+    def test_gestion_des_utilisateurs_par_l_admin(self):
+        self.premier_admin()
+        d = DialogueUtilisateur(self.app, self.conn, None, lambda: None)
+        saisir(d.nom, "Karim")
+        saisir(d.identifiant, "karim")
+        saisir(d.mot_de_passe, "1234")
+        saisir(d.confirmation, "1234")
+        d._enregistrer()
+        self.assertEqual(self.m.erreurs, [])
+        self.assertEqual(us.authentifier(self.conn, "karim", "1234")["role"], "CAISSIER")
+        d = DialogueUtilisateur(self.app, self.conn, None, lambda: None)           # doublon refusé
+        saisir(d.nom, "Autre")
+        saisir(d.identifiant, "KARIM")
+        saisir(d.mot_de_passe, "1234")
+        saisir(d.confirmation, "1234")
+        d._enregistrer()
+        self.assertEqual(len(self.m.erreurs), 1)
+        liste = DialogueUtilisateurs(self.app, self.conn)
+        self.assertEqual(len(liste.tableau.arbre.lignes), 2)
+
+    def test_droits_du_caissier(self):
+        self.premier_admin()
+        us.creer_utilisateur(self.conn, "Karim", "karim", "1234", "1234", "CAISSIER")
+        self.app.deconnecter()
+        login = self.app._vue
+        saisir(login.identifiant, "karim")
+        saisir(login.mot_de_passe, "1234")
+        login._valider()
+        self.assertEqual(self.app.ctx.utilisateur["role"], "CAISSIER")
+        self.app.ouvrir_module("PARFUM")
+        self.assertEqual(set(self.app.modules["PARFUM"].vues), {"Vente", "Session"})         # rien d'autre
+        self.app.ouvrir_module("COSMETIQUE")
+        cosm = self.app.modules["COSMETIQUE"]
+        self.assertEqual(set(cosm.vues), {"Caisse", "Retours", "Stock", "Session"})
+        stock = cosm.vues["Stock"]
+        self.assertFalse(stock.modifiable)
+        self.assertFalse(stock.voir_achat)                                                    # pas de prix d'achat
+        self.assertEqual(self.m.erreurs, [])
+
+
+class TestCosmetique(BaseGui):
+    def creer_produits(self):
+        self.app.ouvrir_module("COSMETIQUE")
+        module = self.app.modules["COSMETIQUE"]
+        stock = module.vues["Stock"]
+        for champs in ({"codes_barres": "6111", "nom": "Shampoing Nivea", "prix_achat": "300", "prix_vente": "500",
+                        "quantite_stock": "20"},
+                       {"code": "DOVE", "nom": "Gel douche Dove", "prix_achat": "100", "prix_vente": "250",
+                        "quantite_stock": "10"}):
+            d = DialogueProduitCaisse(self.app, self.app.ctx, None, stock.rafraichir)
+            self.remplir(d.formulaire, champs)
+            d._enregistrer()
+        self.assertEqual(self.m.erreurs, [])
+        return module
+
+    def test_parcours_complet_de_la_caisse(self):
+        self.premier_admin()
+        module = self.creer_produits()
+        stock = module.vues["Stock"]
+        self.app.ouvrir_module("COSMETIQUE", "Stock")
+        self.assertEqual(len(stock.tableau.arbre.lignes), 2)
+        saisir(stock.recherche, "dove")
         stock.rafraichir()
-        self.assertEqual(list(stock.tableau.arbre.lignes), ["PARFUM:1"])
+        self.assertEqual(len(stock.tableau.arbre.lignes), 1)
         saisir(stock.recherche, "")
 
-        # 3. Dialogues du stock
-        stock.tableau.arbre.selection_set("PARFUM:1")
-        DialogueDetails(self.app, self.conn, "PARFUM", 1)
-        modif = DialogueModifier(self.app, self.conn, "PARFUM", 1, stock.rafraichir)
-        saisir(modif.formulaire.entrees["nom"], "Rose Noire")
-        modif._enregistrer()
-        reappro = DialogueReappro(self.app, self.conn, "PARFUM", 1, stock.rafraichir)
-        saisir(reappro.entree, "100")
-        reappro._valider()
-        self.assertEqual(self.conn.execute(
-            "SELECT quantite_stock_ml FROM parfums WHERE id=1").fetchone()[0], 600)
-        stock.tableau.arbre.selection_set("ALCOOL:1")          # suppression d'un produit
-        stock._supprimer()
-        self.assertEqual(self.conn.execute("SELECT actif FROM alcools WHERE id=1").fetchone()[0], 0)
-        self.assertEqual(m.erreurs, [])
+        # --- sans session : on ne peut pas encaisser
+        caisse = module.vues["Caisse"]
+        self.app.ouvrir_module("COSMETIQUE", "Caisse")
+        saisir(caisse.saisie, "6111")
+        caisse._sur_entree()                                        # un scan de code-barres
+        self.assertEqual(caisse.panier[0]["quantite"], 1)
+        caisse._encaisser()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0], 0)
+        self.assertTrue(any("session" in x.lower() for x in self.m.infos))
 
-        # 4. Vente (flacon + parfum + alcool par défaut)
-        vente = self.app.vues["Vente"]
-        self.app.afficher("Vente")
-        self.assertIsNotNone(vente.ligne)
-        self.assertEqual(vente.ligne["cout_total"], 250)         # alcool supprimé : flacon 100 + parfum 150
-        self.assertIsNone(vente.ligne["alcool_id"])
-        saisir(vente.entree_total, "700")                        # prix modifié à la main
-        vente._maj_benefice()
-        vente._valider()                                         # ajoute au panier puis valide
-        self.assertEqual(m.erreurs, [])
-        self.assertEqual(self.conn.execute("SELECT total FROM ventes").fetchone()[0], 700)
-        self.assertEqual(self.conn.execute(
-            "SELECT quantite_stock FROM flacons").fetchone()[0], 9)
+        # --- ouverture de session puis ventes
+        self.ouvrir_session("1000")
+        saisir(caisse.saisie, "6111")
+        caisse._sur_entree()                                        # même produit : la quantité augmente
+        caisse._traiter_saisie("3*6111")                            # 3 articles d'un coup
+        self.assertEqual((len(caisse.panier), caisse.panier[0]["quantite"]), (1, 5))
+        caisse._fixer(0, "quantite", 2)
+        caisse._traiter_saisie("dove")                              # par ID (sans code-barres)
+        caisse._traiter_saisie("gel douche")                        # par nom
+        self.assertEqual([l["quantite"] for l in caisse.panier], [2, 2])
+        caisse.remise_type, caisse.remise_valeur = "POURCENT", 10   # remise de 10 % sur le ticket
+        caisse._afficher_panier()
+        self.assertEqual(caisse.calcul["total"], 1350)              # (2×500 + 2×250) = 1500 - 10 %
+        saisir(caisse.entree_donne, "2000")
+        caisse._maj_monnaie()
+        self.assertIn("650", caisse.lbl_monnaie.cget("text"))
+        caisse._encaisser()
+        self.assertEqual(self.m.erreurs, [])
+        self.assertEqual(self.conn.execute("SELECT total, monnaie_rendue FROM tickets").fetchone()[:], (1350, 650))
+        self.assertEqual((self.stock("produits_caisse", "quantite_stock", 1), caisse.panier), (18, []))
+        self.assertIn("Ticket n°1", caisse.lbl_dernier.cget("text"))
 
-        # 5. Flacon du client puis « tout effacer »
-        vente.var_flacon_client.set(True)
-        vente._recalculer()
-        self.assertEqual(vente.ligne["cout_flacon"], 0)
-        vente._ajouter_au_panier()                               # sans prix saisi : refusé
-        self.assertEqual(vente.panier, [])
-        m.erreurs.clear()
-        saisir(vente.entree_total, "500")
-        vente._ajouter_au_panier()
-        self.assertEqual(len(vente.panier), 1)
-        self.assertIn("BÉNÉFICE DU PANIER", vente.lbl_benefice_panier.cget("text"))
-        self.assertNotIn("—", vente.lbl_benefice_panier.cget("text"))
-        vente._tout_effacer()
-        self.assertEqual(vente.panier, [])
+        # --- mise en attente puis reprise
+        caisse._traiter_saisie("6111")
+        caisse._mettre_en_attente()
+        self.assertEqual(caisse.panier, [])
+        attentes = DialogueAttentes(self.app, self.app.ctx, caisse._reprendre_panier)
+        attentes.tableau.selectionner(next(iter(attentes.tableau.arbre.lignes)))
+        attentes._reprendre()
+        self.assertEqual(len(caisse.panier), 1)
+        caisse._vider_panier()
 
-        # 6. Client
-        DialogueClient(self.app, self.conn, lambda _i: None)._creer()   # nom vide -> erreur affichée
-        self.assertEqual(len(m.erreurs), 1)
-        m.erreurs.clear()
+        # --- retour d'un article du ticket n°1
+        retours = module.vues["Retours"]
+        self.app.ouvrir_module("COSMETIQUE", "Retours")
+        retours.tableau_tickets.selectionner("1")
+        retours._voir_lignes()
+        retours.tableau_lignes.selectionner(retours.tableau_lignes.arbre.get_children()[0])
+        saisir(retours.entree_qte, "1")
+        retours._ajouter_ligne_ticket()
+        self.assertEqual(retours.ticket_id, 1)
+        retours._valider()
+        self.assertEqual(self.m.erreurs, [])
+        self.assertEqual(self.conn.execute("SELECT total_rembourse FROM retours").fetchone()[0], 450)  # prix payé (remise comprise)
+        self.assertEqual(self.stock("produits_caisse", "quantite_stock", 1), 19)
 
-        # 7. Logs, stats et suppression de la vente
-        logs = self.app.vues["Logs"]
-        self.app.afficher("Logs")
+        # --- mouvement de caisse
+        sessions = module.vues["Session"]
+        mouvement = DialogueMouvement(self.app, self.app.ctx, sessions.rafraichir)
+        saisir(mouvement.montant, "300")
+        saisir(mouvement.motif, "Retrait pour la banque")
+        mouvement._valider()
+        self.assertEqual(self.m.erreurs, [])
+
+        # --- clôture : attendu = 1000 + 1350 - 450 - 300 = 1600 ; compté 1550 => manque 50
+        self.app.ouvrir_module("COSMETIQUE", "Session")
+        session_id = ss.session_active(self.conn)["id"]
+        cloture = DialogueCloture(self.app, self.app.ctx, session_id, sessions.rafraichir)
+        saisir(cloture.entree, "1550")
+        cloture._cloturer()
+        self.assertEqual(self.m.erreurs, [])
+        s = ss.lire(self.conn, session_id)
+        self.assertEqual((s["statut"], s["especes_attendues"], s["ecart"]), ("CLOTUREE", 1600, -50))
+        sessions.rafraichir()
+        self.assertEqual(len(sessions.tableau_historique.arbre.lignes), 1)
+        self.assertIn("MANQUE", sessions.lbl_ecarts.cget("text"))
+
+        # --- logs et statistiques
+        logs = module.vues["Logs"]
+        self.app.ouvrir_module("COSMETIQUE", "Logs")
         self.assertGreaterEqual(len(logs.tableau.arbre.lignes), 5)
-        iid_vente = next(i for i, (v, _t) in logs.tableau.arbre.lignes.items() if v[1] == "Vente")
-        logs.tableau.arbre.selection_set(iid_vente)
+        self.assertIn("Dépense nette", logs.lbl_totaux.cget("text"))
+        self.assertIn("Boss", " ".join(str(v) for v, _t in logs.tableau.arbre.lignes.values()))
+        ligne_vente = next(i for i, (v, _t) in logs.tableau.arbre.lignes.items() if v[1] == "Vente")
+        logs.tableau.selectionner(ligne_vente)
+        logs._annuler_ticket()                                      # session clôturée : refusé
+        self.assertTrue(any("clôturée" in e for e in self.m.erreurs))
+        self.assertEqual(self.conn.execute("SELECT statut FROM tickets").fetchone()[0], "VALIDE")
+
+    def test_retour_libre_avec_liste_de_suggestions(self):
+        self.premier_admin()
+        module = self.creer_produits()
+        from services import caisse_service as cs
+        cs.creer_produit(self.conn, {"nom": "Shampoing Dove", "prix_achat": "200", "prix_vente": "400",
+                                     "quantite_stock": "5"})
+        self.ouvrir_session("1000")
+        retours = module.vues["Retours"]
+        self.app.ouvrir_module("COSMETIQUE", "Retours")
+        retours._changer_mode("Retour libre (sans ticket)")
+        saisir(retours.entree_libre, "sham")
+        retours._maj_suggestions()                                  # la liste s'affiche pendant la frappe
+        self.assertEqual(len(retours.suggestions.arbre.lignes), 2)
+        saisir(retours.entree_libre, "nivea")
+        retours._maj_suggestions()
+        self.assertEqual(len(retours.suggestions.arbre.lignes), 1)
+        retours.suggestions.selectionner(next(iter(retours.suggestions.arbre.lignes)))
+        retours._ajouter_suggestion()                               # Entrée / double-clic sur la liste
+        self.assertEqual([l["designation"] for l in retours.lignes_retour], ["Shampoing Nivea"])
+        saisir(retours.entree_libre, "sham")                        # Entrée avec plusieurs résultats : la liste
+        retours._sur_entree_libre()
+        self.assertEqual(len(retours.lignes_retour), 1)
+        self.assertEqual(len(retours.suggestions.arbre.lignes), 2)
+        saisir(retours.entree_libre, "dove")                        # un seul résultat : ajout direct
+        retours._sur_entree_libre()
+        self.assertEqual(len(retours.lignes_retour), 2)
+        retours._valider()
+        self.assertEqual(self.m.erreurs, [])
+        self.assertEqual(self.conn.execute("SELECT total_rembourse FROM retours").fetchone()[0], 500 + 250)
+
+    def test_changement_d_employe_sans_cloturer(self):
+        self.premier_admin()
+        us.creer_utilisateur(self.conn, "Sara", "sara", "1234", "1234", "CAISSIER")
+        module = self.creer_produits()
+        self.ouvrir_session("1000")                                 # session de Boss
+        admin_session = ss.session_active(self.conn)["id"]
+        caisse = module.vues["Caisse"]
+        self.app.ouvrir_module("COSMETIQUE", "Caisse")
+        caisse._traiter_saisie("6111")
+        caisse._encaisser()
+        self.app.deconnecter()                                      # Sara se connecte, sans que Boss ait clôturé
+        login = self.app._vue
+        saisir(login.identifiant, "sara")
+        saisir(login.mot_de_passe, "1234")
+        login._valider()
+        self.ouvrir_session("200")
+        self.assertEqual(ss.lire(self.conn, admin_session)["statut"], "EN_PAUSE")
+        self.assertEqual(ss.session_active(self.conn)["utilisateur_nom"], "Sara")
+        self.app.ouvrir_module("COSMETIQUE", "Caisse")
+        caisse = self.app.modules["COSMETIQUE"].vues["Caisse"]
+        caisse._traiter_saisie("6111")
+        saisir(caisse.entree_donne, "500")
+        caisse._encaisser()                                         # va dans la session de Sara
+        self.assertEqual(self.m.erreurs, [])
+        sara = ss.session_active(self.conn)["id"]
+        self.assertEqual(self.conn.execute("SELECT session_id FROM tickets ORDER BY id DESC").fetchone()[0], sara)
+        self.assertEqual(ss.calculer(self.conn, sara)["attendues"], 700)
+        self.assertEqual(ss.calculer(self.conn, admin_session)["attendues"], 1500)
+
+
+class TestParfumEnSession(BaseGui):
+    def test_vente_parfum_dans_la_session(self):
+        self.premier_admin()
+        self.app.ouvrir_module("PARFUM")
+        module = self.app.modules["PARFUM"]
+        creation = module.vues["Création"]
+        self.remplir(creation.formulaires["FLACON"], {"nom": "Carré 50ml", "capacite_ml": "50", "prix_achat": "100",
+                                                      "quantite_stock": "10", "qnt_parfum_necessaire": "15"})
+        creation._creer("FLACON")
+        self.remplir(creation.formulaires["PARFUM"], {"nom": "Rose de Mai", "prix_achat_100ml": "1000",
+                                                      "quantite_stock_ml": "500"})
+        creation._creer("PARFUM")
+        self.assertEqual(self.m.erreurs, [])
+
+        vente = module.vues["Vente"]
+        self.app.ouvrir_module("PARFUM", "Vente")
+        saisir(vente.entree_total, "700")
+        vente._valider()                                            # pas de session : refusé + proposition d'ouvrir
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM ventes").fetchone()[0], 0)
+        self.ouvrir_session("1000")
+        saisir(vente.entree_total, "700")
+        vente._valider()
+        self.assertEqual(self.m.erreurs, [])
+        v = self.conn.execute("SELECT * FROM ventes").fetchone()
+        self.assertEqual((v["total"], v["session_id"], v["utilisateur_id"]), (700, 1, 1))
+        self.assertEqual(ss.calculer(self.conn, 1)["attendues"], 1700)
+
+        # suppression de la vente par l'admin (session ouverte) : visible dans les logs avec le nom
+        logs = module.vues["Logs"]
+        self.app.ouvrir_module("PARFUM", "Logs")
+        self.assertIn("Boss", " ".join(str(vals) for vals, _t in logs.tableau.arbre.lignes.values()))
+        logs.tableau.selectionner(next(i for i, (vals, _t) in logs.tableau.arbre.lignes.items() if vals[1] == "Vente"))
         logs._supprimer_vente()
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM ventes").fetchone()[0], 0)
-        self.assertEqual(self.conn.execute(
-            "SELECT quantite_stock FROM flacons").fetchone()[0], 10)
-        self.assertEqual(m.erreurs, [])
-
-        # 8. Paramètres + connexion par mot de passe
-        params = self.app.vues["Paramètres"]
-        saisir(params.nouveau, "secret1")
-        saisir(params.confirmation, "secret1")
-        params._definir()
-        params._sauvegarder()
-        self.assertEqual(m.erreurs, [])
-        connexion = DialogueConnexion(self.app, self.conn)
-        saisir(connexion.entree, "mauvais")
-        connexion._valider()
-        self.assertFalse(connexion.ok)
-        saisir(connexion.entree, "secret1")
-        connexion._valider()
-        self.assertTrue(connexion.ok)
-
-    def test_id_personnalise_dans_creation_et_stock(self):
-        m = gui_stubs.messages
-        creation = self.app.vues["Création"]
-        form = creation.formulaires["PARFUM"]
-        self.remplir(form, {"code": "ROSE1", "nom": "Rose", "prix_achat_100ml": "1000",
-                            "quantite_stock_ml": "500"})
-        creation._creer("PARFUM")
-        self.assertEqual(m.erreurs, [])
-        self.remplir(form, {"code": "rose1", "nom": "Autre", "prix_achat_100ml": "1"})   # ID déjà pris
-        creation._creer("PARFUM")
-        self.assertEqual(len(m.erreurs), 1)
-        self.assertIn("déjà utilisé", m.erreurs[0])
-        m.erreurs.clear()
-        stock = self.app.vues["Stock"]
-        self.app.afficher("Stock")
-        self.assertEqual(stock.tableau.arbre.lignes["PARFUM:1"][0][0], "ROSE1")
-        # modification depuis le stock : on peut garder son ID et en prendre un libre
-        modif = DialogueModifier(self.app, self.conn, "PARFUM", 1, stock.rafraichir)
-        saisir(modif.formulaire.entrees["code"], "ROSE2")
-        modif._enregistrer()
-        self.assertEqual(m.erreurs, [])
-        self.assertEqual(self.conn.execute("SELECT code FROM parfums").fetchone()[0], "ROSE2")
-
-    def test_logs_filtre_ventes_apres_suppression(self):
-        self.creer_catalogue()
-        vente = self.app.vues["Vente"]
-        self.app.afficher("Vente")
-        for prix in ("700", "800"):
-            saisir(vente.entree_total, prix)
-            vente._valider()
-        logs = self.app.vues["Logs"]
-        self.app.afficher("Logs")
-        logs.menu_type.set("Ventes")
-        logs.charger_logs()
-        self.assertEqual(len(logs.tableau.arbre.lignes), 2)
-        logs.tableau.arbre.selection_set(next(iter(logs.tableau.arbre.lignes)))
-        logs._supprimer_vente()                                  # la vente supprimée disparaît de « Ventes »
-        self.assertEqual(len(logs.tableau.arbre.lignes), 1)
-        logs.menu_type.set("Tous")                               # ... mais reste dans l'historique complet
-        logs.charger_logs()
-        types = [valeurs[1] for valeurs, _tags in logs.tableau.arbre.lignes.values()]
-        self.assertEqual((types.count("Vente"), types.count("Annulation")), (2, 1))
-        self.assertIn("Dépense nette", logs.lbl_totaux.cget("text"))
-        self.assertIn("Bénéfice net", logs.lbl_totaux.cget("text"))
+        self.assertEqual(self.stock("flacons", "quantite_stock"), 10)
 
     def test_alcool_automatique_dans_le_formulaire(self):
-        creation = self.app.vues["Création"]
-        formulaire = creation.formulaires["FLACON"]
+        self.premier_admin()
+        self.app.ouvrir_module("PARFUM")
+        formulaire = self.app.modules["PARFUM"].vues["Création"].formulaires["FLACON"]
         saisir(formulaire.entrees["capacite_ml"], "100")
         saisir(formulaire.entrees["qnt_parfum_necessaire"], "30")
         formulaire._maj_alcool()
@@ -206,17 +357,28 @@ class TestEcrans(unittest.TestCase):
         formulaire._maj_alcool()
         self.assertIn("dépasse", formulaire.lbl_alcool.cget("text"))
 
-    def test_stock_negatif_affiche_alerte(self):
-        self.creer_catalogue()
-        self.conn.execute("UPDATE flacons SET quantite_stock = 0")
-        vente = self.app.vues["Vente"]
-        self.app.afficher("Vente")
-        self.assertIn("Flacon en rupture", vente.lbl_alertes.cget("text"))
-        saisir(vente.entree_total, "500")
-        vente._valider()
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM ventes").fetchone()[0], 1)
-        self.assertEqual(self.conn.execute("SELECT quantite_stock FROM flacons").fetchone()[0], -1)
-        self.assertEqual(len(gui_stubs.messages.avertissements), 1)
+    def test_id_personnalise_dans_creation_et_stock(self):
+        self.premier_admin()
+        self.app.ouvrir_module("PARFUM")
+        module = self.app.modules["PARFUM"]
+        creation = module.vues["Création"]
+        form = creation.formulaires["PARFUM"]
+        self.remplir(form, {"code": "ROSE1", "nom": "Rose", "prix_achat_100ml": "1000", "quantite_stock_ml": "500"})
+        creation._creer("PARFUM")
+        self.assertEqual(self.m.erreurs, [])
+        self.remplir(form, {"code": "rose1", "nom": "Autre", "prix_achat_100ml": "1"})      # ID déjà pris
+        creation._creer("PARFUM")
+        self.assertEqual(len(self.m.erreurs), 1)
+        self.assertIn("déjà utilisé", self.m.erreurs[0])
+        self.m.erreurs.clear()
+        stock = module.vues["Stock"]
+        self.app.ouvrir_module("PARFUM", "Stock")
+        self.assertEqual(stock.tableau.arbre.lignes["PARFUM:1"][0][0], "ROSE1")
+        modif = DialogueModifier(self.app, self.conn, "PARFUM", 1, stock.rafraichir)
+        saisir(modif.formulaire.entrees["code"], "ROSE2")
+        modif._enregistrer()
+        self.assertEqual(self.m.erreurs, [])
+        self.assertEqual(self.conn.execute("SELECT code FROM parfums").fetchone()[0], "ROSE2")
 
 
 if __name__ == "__main__":

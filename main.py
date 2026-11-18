@@ -33,14 +33,14 @@ def main() -> int:
         configurer_journal()
         import customtkinter as ctk
         from database.connection import ouvrir_base
-        from views.main_window import FenetrePrincipale
+        from views.application import Application
         from views.style import appliquer_theme_nevada
 
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
         appliquer_theme_nevada()          # couleurs du logo Nevada
         ouverture = ouvrir_base()
-        FenetrePrincipale(ouverture.connexion, ouverture.message).mainloop()
+        Application(ouverture.connexion, ouverture.message).mainloop()
         return 0
     except Exception as erreur:  # noqa: BLE001 - dernier filet de sécurité
         logging.getLogger(__name__).exception("Erreur fatale au démarrage")

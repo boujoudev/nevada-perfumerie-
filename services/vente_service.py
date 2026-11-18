@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from database.connection import transaction
 from models.catalogue import CATALOGUE
 from repositories import logs_repo, produits_repo
+from services import session_service, utilisateurs_service
 from utils.erreurs import ErreurMetier
 from utils.formatage import fmt_datetime, fmt_nombre
 
@@ -80,7 +81,8 @@ def _libelle_produit(ligne: dict) -> str:
 
 
 def valider_vente(conn: sqlite3.Connection, lignes: List[dict],
-                  client_id: Optional[int] = None, note: Optional[str] = None) -> dict:
+                  client_id: Optional[int] = None, note: Optional[str] = None,
+                  utilisateur=None) -> dict:
     """Enregistre une vente (1 ou plusieurs combinaisons) en une seule transaction.
 
     Chaque élément de `lignes` : flacon_id, parfum_id, alcool_id (ou None),
@@ -89,6 +91,10 @@ def valider_vente(conn: sqlite3.Connection, lignes: List[dict],
     """
     if not lignes:
         raise ErreurMetier("Le panier est vide : ajoutez au moins une combinaison.")
+    # Avec un utilisateur connecté, la vente va dans la session de caisse ouverte (obligatoire)
+    session = session_service.exiger_session_active(conn) if utilisateur is not None else None
+    utilisateur_id = utilisateur["id"] if utilisateur is not None else None
+    session_id = session["id"] if session is not None else None
 
     with transaction(conn):
         calculees: List[dict] = []
@@ -112,8 +118,9 @@ def valider_vente(conn: sqlite3.Connection, lignes: List[dict],
                 client_id = None
 
         vente_id = conn.execute(
-            "INSERT INTO ventes (client_id, total, cout_total, benefice, note) VALUES (?, ?, ?, ?, ?)",
-            (client_id, total, cout, benefice, note)).lastrowid
+            "INSERT INTO ventes (client_id, total, cout_total, benefice, note, utilisateur_id, session_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (client_id, total, cout, benefice, note, utilisateur_id, session_id)).lastrowid
 
         touches = set()
         for l in calculees:
@@ -142,7 +149,8 @@ def valider_vente(conn: sqlite3.Connection, lignes: List[dict],
                 details += f" — client : {nom_client}"
             logs_repo.ajouter(conn, "VENTE", None, None, _libelle_produit(l), quantite=1,
                               prix=l["prix_final"], benefice=l["benefice"],
-                              vente_id=vente_id, details=details)
+                              vente_id=vente_id, details=details,
+                              utilisateur_id=utilisateur_id, session_id=session_id)
 
         avertissements: List[str] = []
         for type_code, identifiant in sorted(touches):
@@ -156,14 +164,23 @@ def valider_vente(conn: sqlite3.Connection, lignes: List[dict],
             "avertissements": avertissements}
 
 
-def supprimer_vente(conn: sqlite3.Connection, vente_id: int) -> None:
+def supprimer_vente(conn: sqlite3.Connection, vente_id: int, utilisateur=None) -> None:
     """Supprime une vente, remet les stocks et garde une trace dans les logs.
 
     Le flacon n'est pas remis en stock s'il avait été apporté par le client.
+    Avec un utilisateur : réservé à l'ADMIN, et impossible si la session de la vente est clôturée
+    (les sessions clôturées ne changent plus : faire un mouvement de caisse à la place).
     """
     vente = conn.execute("SELECT * FROM ventes WHERE id = ?", (vente_id,)).fetchone()
     if vente is None:
         raise ErreurMetier("Cette vente n'existe plus (déjà supprimée ?).")
+    if utilisateur is not None:
+        utilisateurs_service.exiger_admin(utilisateur, "La suppression d'une vente est réservée à l'administrateur.")
+        if vente["session_id"] is not None:
+            session = session_service.lire(conn, vente["session_id"])
+            if session is not None and session["statut"] == "CLOTUREE":
+                raise ErreurMetier("La session de cette vente est clôturée : elle ne peut plus être modifiée. "
+                                   "Enregistrez plutôt un mouvement de caisse (remboursement).")
     lignes = conn.execute("SELECT * FROM lignes_vente WHERE vente_id = ?", (vente_id,)).fetchall()
 
     with transaction(conn):
@@ -179,5 +196,7 @@ def supprimer_vente(conn: sqlite3.Connection, vente_id: int) -> None:
             conn, "ANNULATION", None, None, f"Vente #{vente_id} supprimée", quantite=1,
             prix=-vente["total"], benefice=-vente["benefice"], vente_id=vente_id,
             details=f"Vente du {fmt_datetime(vente['date_vente'])} supprimée ; stocks remis. "
-                    f"Contenu : " + " ; ".join(resume))
+                    f"Contenu : " + " ; ".join(resume),
+            utilisateur_id=utilisateur["id"] if utilisateur is not None else None,
+            session_id=vente["session_id"])
         conn.execute("DELETE FROM ventes WHERE id = ?", (vente_id,))

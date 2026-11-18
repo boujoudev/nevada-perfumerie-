@@ -10,10 +10,9 @@ import customtkinter as ctk
 
 from models.catalogue import CATALOGUE
 from repositories import produits_repo
-from services import auth_service, clients_service, produits_service
+from services import clients_service, produits_service
 from utils.erreurs import ErreurMetier
 from utils.formatage import fmt_datetime, fmt_nombre
-from utils.ressources import charger_logo
 from views.widgets import (FenetreModale, FormulaireProduit, afficher_avertissement,
                            afficher_erreur, afficher_info, ligne_boutons)
 
@@ -148,37 +147,3 @@ class DialogueClient(FenetreModale):
             return
         self.apres(identifiant)
         self.destroy()
-
-
-class DialogueConnexion(FenetreModale):
-    """Demande du mot de passe au démarrage. self.ok vaut True si l'accès est autorisé."""
-
-    def __init__(self, master, conn: sqlite3.Connection):
-        self.conn, self.ok, self.essais = conn, False, 0
-        super().__init__(master, "Connexion", 380, 470, lier_au_parent=False)
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.logo = charger_logo(210)
-        if self.logo is not None:
-            ctk.CTkLabel(self, text="", image=self.logo).pack(pady=(20, 10))
-        else:
-            ctk.CTkLabel(self, text="NEVADA", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(30, 10))
-        ctk.CTkLabel(self, text="Mot de passe :").pack()
-        self.entree = ctk.CTkEntry(self, show="•", width=220, justify="center")
-        self.entree.pack(pady=8)
-        self.entree.bind("<Return>", lambda _e: self._valider())
-        self.message = ctk.CTkLabel(self, text="", text_color="#dc2626")
-        self.message.pack()
-        ctk.CTkButton(self, text="Se connecter", command=self._valider).pack(pady=10)
-        self.after(250, self.entree.focus_set)
-
-    def _valider(self) -> None:
-        if auth_service.verifier_mot_de_passe(self.conn, self.entree.get()):
-            self.ok = True
-            self.destroy()
-            return
-        self.essais += 1
-        if self.essais >= 3:
-            self.destroy()
-            return
-        self.message.configure(text=f"Mot de passe incorrect ({self.essais}/3)")
-        self.entree.delete(0, "end")
