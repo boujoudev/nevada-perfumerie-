@@ -34,6 +34,7 @@ class Application(ctk.CTk):
         self.modules: Dict[str, ctk.CTkFrame] = {}
         self._vue = None
         self._vue_ephemere = False
+        self.accueil: Optional[AccueilView] = None        # construit une fois par connexion
         self._alertes_faites: set = set()
         self.title("Nevada Parfumerie — Gestion")
         # La fenêtre s'adapte à l'écran (petits portables) au lieu de dépasser
@@ -102,7 +103,9 @@ class Application(ctk.CTk):
         self.afficher_accueil()
 
     def afficher_accueil(self) -> None:
-        self._montrer(AccueilView(self.conteneur, self, self.ctx), ephemere=True)
+        if self.accueil is None:
+            self.accueil = AccueilView(self.conteneur, self, self.ctx)
+        self._montrer(self.accueil)
 
     def ouvrir_module(self, nom: str, section: Optional[str] = None) -> None:
         """Ouvre le module PARFUM ou COSMETIQUE (créé à la première ouverture, puis conservé)."""
@@ -144,6 +147,9 @@ class Application(ctk.CTk):
         for module in self.modules.values():
             module.destroy()
         self.modules.clear()
+        if self.accueil is not None:
+            self.accueil.destroy()
+            self.accueil = None
         self._alertes_faites.clear()
         if not self._vue_ephemere:
             self._vue = None                               # c'était un module (détruit ci-dessus)

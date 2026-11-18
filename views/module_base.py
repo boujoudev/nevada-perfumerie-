@@ -1,4 +1,8 @@
-"""Base commune des deux modules (Parfum, Cosmétique) : menu latéral, vues, bouton « Accueil »."""
+"""Base commune des deux modules (Parfum, Cosmétique) : menu latéral, vues, bouton « Accueil ».
+
+Performance : les écrans sont construits À LA DEMANDE (à la première ouverture de la section) et ne sont
+rechargés depuis la base que si des données ont changé depuis leur dernier affichage.
+"""
 
 from __future__ import annotations
 
@@ -43,46 +47,62 @@ class ModuleBase(ctk.CTkFrame):
             ctk.CTkLabel(menu, text="", image=self.logo).pack(pady=(14, 4), padx=10)
         ctk.CTkLabel(menu, text=titre_module, font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(0, 12))
 
-        contenu = ctk.CTkFrame(self, fg_color="transparent")
-        contenu.grid(row=0, column=1, sticky="nsew")
-        contenu.grid_columnconfigure(0, weight=1)
-        contenu.grid_rowconfigure(0, weight=1)
+        self.contenu = ctk.CTkFrame(self, fg_color="transparent")
+        self.contenu.grid(row=0, column=1, sticky="nsew")
+        self.contenu.grid_columnconfigure(0, weight=1)
+        self.contenu.grid_rowconfigure(0, weight=1)
 
         self.boutons: Dict[str, ctk.CTkButton] = {}
-        self.vues: Dict[str, ctk.CTkFrame] = {}
+        self.vues: Dict[str, ctk.CTkFrame] = {}                 # vues déjà construites
+        self._fabriques: Dict[str, Callable] = {}
+        self._version: Dict[str, int] = {}                      # état de la base au dernier rafraîchissement
         for cle, libelle, permission, fabrique in definitions:
             if not ctx.peut(permission):
                 continue
-            self.vues[cle] = fabrique(contenu)
+            self._fabriques[cle] = fabrique
             bouton = ctk.CTkButton(menu, text=libelle, anchor="w", height=42, fg_color="transparent",
                                    text_color=("gray10", "gray10"), hover_color=VERT_CLAIR,
                                    command=lambda c=cle: self.afficher(c))
             bouton.pack(fill="x", padx=10, pady=3)
             self.boutons[cle] = bouton
-        self.section_par_defaut = next((c for c in section_par_defaut if c in self.vues), next(iter(self.vues), None))
+        self.sections: Tuple[str, ...] = tuple(self._fabriques)  # sections autorisées pour cet utilisateur
+        self.section_par_defaut = next((c for c in section_par_defaut if c in self._fabriques),
+                                       next(iter(self._fabriques), None))
 
     # ------------------------------------------------------------ navigation
-    def afficher(self, cle: str) -> None:
+    def vue(self, cle: str):
+        """La vue d'une section (construite à la première demande)."""
         if cle not in self.vues:
+            self.vues[cle] = self._fabriques[cle](self.contenu)
+        return self.vues[cle]
+
+    def afficher(self, cle: str, forcer: bool = False) -> None:
+        if cle not in self._fabriques:
             return
         self.section_courante = cle
         for nom, bouton in self.boutons.items():
             actif = nom == cle
             bouton.configure(fg_color=BLEU if actif else "transparent",
                              text_color=("white", "white") if actif else ("gray10", "gray10"))
-        for nom, vue in self.vues.items():
+        for nom, autre in self.vues.items():
             if nom != cle:
-                vue.grid_remove()
-        vue = self.vues[cle]
+                autre.grid_remove()
+        vue = self.vue(cle)
         vue.grid(row=0, column=0, sticky="nsew")
-        try:
-            vue.rafraichir()
-        except sqlite3.Error as erreur:
-            journal.exception("Rafraîchissement %s", cle)
-            afficher_erreur(self, f"Erreur de base de données : {erreur}")
+        # Rechargement depuis la base seulement si quelque chose a changé depuis le dernier affichage
+        if forcer or self._version.get(cle) != self.ctx.conn.total_changes:
+            try:
+                vue.rafraichir()
+            except sqlite3.Error as erreur:
+                journal.exception("Rafraîchissement %s", cle)
+                afficher_erreur(self, f"Erreur de base de données : {erreur}")
+            self._version[cle] = self.ctx.conn.total_changes
+        hook = getattr(vue, "au_premier_plan", None)             # ex. remettre le curseur dans le champ de scan
+        if callable(hook):
+            hook()
 
     def rafraichir_courant(self, section: Optional[str] = None) -> None:
-        self.afficher(section if section in self.vues else (self.section_courante or self.section_par_defaut))
+        self.afficher(section if section in self._fabriques else (self.section_courante or self.section_par_defaut))
 
     # ------------------------------------------------------------------ sortie
     def panier_en_cours(self) -> bool:

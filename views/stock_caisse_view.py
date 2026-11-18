@@ -18,6 +18,7 @@ from views.dialogues_commun import DialogueRapport
 from views.widgets import Tableau, afficher_erreur, afficher_info, confirmer
 
 journal = logging.getLogger(__name__)
+LIMITE_AFFICHAGE = 300      # au-delà, on invite à affiner la recherche (un gros tableau ralentit l'écran)
 
 
 class StockCaisseView(ctk.CTkFrame):
@@ -71,15 +72,17 @@ class StockCaisseView(ctk.CTkFrame):
             afficher_erreur(self, f"Erreur de base de données : {erreur}")
             return
         self.tableau.vider()
-        bas = 0
-        for p in produits:
-            bas += p["bas"]
+        total = len(produits)
+        bas = sum(1 for p in produits if p["bas"])
+        for p in produits[:LIMITE_AFFICHAGE]:
             ligne = [p["code_affiche"], p["codes_barres"], p["nom"], p["categorie"] or ""]
             if self.voir_achat:
                 ligne.append(fmt_prix(p["prix_achat"]))
             ligne += [fmt_prix(p["prix_vente"]), p["stock"]]
             self.tableau.ajouter(ligne, iid=str(p["id"]), tags=("bas",) if p["bas"] else ())
-        texte = f"{len(produits)} produit(s)" + (f" — {bas} en stock bas (rouge)" if bas else "")
+        texte = f"{total} produit(s)" + (f" — {bas} en stock bas (rouge)" if bas else "")
+        if total > LIMITE_AFFICHAGE:
+            texte += f" — {LIMITE_AFFICHAGE} affichés : tapez dans la recherche pour affiner"
         if valeur is not None:
             texte += f" — valeur du stock : {fmt_prix(valeur)}"
         self.lbl_resume.configure(text=texte)

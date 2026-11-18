@@ -136,5 +136,5 @@ tests/                     tests unitaires + parcours complet des écrans
 | `No module named tkinter` | Réinstaller Python en cochant *tcl/tk and IDLE* |
 | Import Excel impossible | `pip install openpyxl` (ou enregistrer le fichier en CSV) |
 | L'.exe ne démarre pas | Ouvrir `%APPDATA%\GestionParfumerie\application.log` |
-| Mot de passe administrateur oublié | Intervention sur la base (table `utilisateurs`) : contacter le développeur |
+| Mot de passe oublié | Fermer l'application puis lancer `python outils/reinitialiser_mot_de_passe.py` (les mots de passe sont chiffrés : on ne peut pas les relire, seulement en définir un nouveau ; une copie de la base est faite avant) |
 | « Impossible d'écrire le fichier » à l'export | Fermer le CSV dans Excel puis réessayer |

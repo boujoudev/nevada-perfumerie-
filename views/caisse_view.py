@@ -153,6 +153,9 @@ class CaisseView(ctk.CTkFrame):
         self._maj_bandeau()
         self._charger_clients()
         self.btn_attentes.configure(text=f"En attente ({len(caisse_service.lister_attentes(self.conn))}) F9")
+
+    def au_premier_plan(self) -> None:
+        """Appelé à chaque affichage de l'écran : curseur dans le champ de scan, session à ouvrir ?"""
         self.after(150, self.saisie.focus_set)
         if session_service.session_active(self.conn) is None:
             self.after(350, self._proposer_session)
