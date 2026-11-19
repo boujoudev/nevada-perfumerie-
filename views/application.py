@@ -12,6 +12,7 @@ import customtkinter as ctk
 from database import connection as base
 from repositories import logs_caisse_repo
 from services import caisse_service, produits_service, utilisateurs_service
+from utils import perf
 from utils.contexte import Contexte
 from utils.ressources import chemin_ressource
 from views.accueil_view import AccueilView
@@ -84,10 +85,12 @@ class Application(ctk.CTk):
         if self._vue is not None and self._vue is not vue:
             if self._vue_ephemere:
                 self._vue.destroy()
-            else:
+            elif not perf.EMPILER:
                 self._vue.grid_remove()
         self._vue, self._vue_ephemere = vue, ephemere
         vue.grid(row=0, column=0, sticky="nsew")
+        if perf.EMPILER:
+            vue.tkraise()
         if hasattr(vue, "rafraichir") and not isinstance(vue, (ModuleParfum, ModuleCosmetique)):
             vue.rafraichir()
 
@@ -103,18 +106,29 @@ class Application(ctk.CTk):
         self.afficher_accueil()
 
     def afficher_accueil(self) -> None:
+        chrono = perf.Chrono("Accueil")
         if self.accueil is None:
             self.accueil = AccueilView(self.conteneur, self, self.ctx)
+        chrono.etape("construction")
         self._montrer(self.accueil)
+        chrono.etape("affichage")
+        self.update_idletasks()
+        chrono.etape("mise en page")
+        chrono.fin()
 
     def ouvrir_module(self, nom: str, section: Optional[str] = None) -> None:
         """Ouvre le module PARFUM ou COSMETIQUE (créé à la première ouverture, puis conservé)."""
+        chrono = perf.Chrono(f"Ouverture du module {nom}")
         if nom not in self.modules:
             fabrique = ModuleParfum if nom == "PARFUM" else ModuleCosmetique
             self.modules[nom] = fabrique(self.conteneur, self, self.ctx)
+        chrono.etape("construction du module")
         module = self.modules[nom]
         self._montrer(module)
+        chrono.etape("affichage")
         module.rafraichir_courant(section)
+        chrono.etape("section")
+        chrono.fin()
         if nom not in self._alertes_faites:
             self._alertes_faites.add(nom)
             self.after(500, lambda: self._notifier_stock_bas(nom))

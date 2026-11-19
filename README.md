@@ -129,7 +129,21 @@ assets/  outils/           logo et icônes, outil de préparation du logo
 tests/                     tests unitaires + parcours complet des écrans
 ```
 
-## 11. Dépannage
+## 11. Diagnostic de lenteur
+
+Toute action de l'interface qui dépasse 0,3 s est notée dans `application.log` (aussi dans l'.exe) :
+`LENT : Cosmétique › Caisse = 850 ms (construction 600 ms, mise en page 200 ms)`.
+Pour tout mesurer et comparer deux modes d'affichage :
+
+```bash
+NEVADA_PERF=1 python main.py                       # mode normal, tout est journalisé
+NEVADA_PERF=1 NEVADA_EMPILER=1 python main.py      # mode alternatif (écrans empilés)
+```
+Windows : `set NEVADA_PERF=1` (et `set NEVADA_EMPILER=1`) puis lancer `python main.py` ou l'.exe depuis la même fenêtre.
+« construction » = création de l'écran (1re ouverture seulement), « données » = lecture de la base,
+« mise en page » = dessin à l'écran.
+
+## 12. Dépannage
 
 | Problème | Solution |
 |---|---|

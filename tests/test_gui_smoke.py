@@ -183,6 +183,22 @@ class TestPerformance(BaseGui):
         module.afficher("Stock", forcer=True)
         self.assertEqual(len(appels), 3)
 
+    def test_mode_alternatif_ecrans_empiles(self):
+        from utils import perf
+        self.premier_admin()
+        self.app.ouvrir_module("COSMETIQUE")
+        module = self.app.modules["COSMETIQUE"]
+        appels = []
+        module.vue("Caisse").tkraise = lambda: appels.append("raise")
+        module.afficher("Caisse")
+        self.assertEqual(appels, [])                                          # mode normal : pas de tkraise
+        perf.EMPILER = True
+        try:
+            module.afficher("Caisse")
+            self.assertEqual(appels, ["raise"])                               # mode empilé : l'écran est remonté
+        finally:
+            perf.EMPILER = False
+
     def test_logo_charge_une_seule_fois(self):
         from utils import ressources
         self.assertIs(ressources.charger_logo(150), ressources.charger_logo(150))

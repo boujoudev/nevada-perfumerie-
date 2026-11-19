@@ -13,6 +13,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import customtkinter as ctk
 
 from services import utilisateurs_service
+from utils import perf
 from utils.contexte import Contexte
 from utils.ressources import charger_logo
 from views.style import BLEU, VERT_CLAIR
@@ -29,6 +30,7 @@ class ModuleBase(ctk.CTkFrame):
                  section_par_defaut: Tuple[str, ...]):
         super().__init__(master, fg_color="transparent")
         self.app, self.ctx = app, ctx
+        self.titre = titre_module
         self.section_courante: Optional[str] = None
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -79,16 +81,23 @@ class ModuleBase(ctk.CTkFrame):
     def afficher(self, cle: str, forcer: bool = False) -> None:
         if cle not in self._fabriques:
             return
+        chrono = perf.Chrono(f"{self.titre} › {cle}")
         self.section_courante = cle
         for nom, bouton in self.boutons.items():
             actif = nom == cle
             bouton.configure(fg_color=BLEU if actif else "transparent",
                              text_color=("white", "white") if actif else ("gray10", "gray10"))
-        for nom, autre in self.vues.items():
-            if nom != cle:
-                autre.grid_remove()
-        vue = self.vue(cle)
-        vue.grid(row=0, column=0, sticky="nsew")
+        vue = self.vue(cle)                                       # construit à la première demande
+        chrono.etape("construction")
+        if perf.EMPILER:                                          # mode alternatif : écrans empilés
+            vue.grid(row=0, column=0, sticky="nsew")
+            vue.tkraise()
+        else:
+            for nom, autre in self.vues.items():
+                if nom != cle:
+                    autre.grid_remove()
+            vue.grid(row=0, column=0, sticky="nsew")
+        chrono.etape("affichage")
         # Rechargement depuis la base seulement si quelque chose a changé depuis le dernier affichage
         if forcer or self._version.get(cle) != self.ctx.conn.total_changes:
             try:
@@ -97,9 +106,13 @@ class ModuleBase(ctk.CTkFrame):
                 journal.exception("Rafraîchissement %s", cle)
                 afficher_erreur(self, f"Erreur de base de données : {erreur}")
             self._version[cle] = self.ctx.conn.total_changes
+        chrono.etape("données")
         hook = getattr(vue, "au_premier_plan", None)             # ex. remettre le curseur dans le champ de scan
         if callable(hook):
             hook()
+        self.update_idletasks()                                   # force la mise en page : on mesure aussi le dessin
+        chrono.etape("mise en page")
+        chrono.fin()
 
     def rafraichir_courant(self, section: Optional[str] = None) -> None:
         self.afficher(section if section in self._fabriques else (self.section_courante or self.section_par_defaut))
